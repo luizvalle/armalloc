@@ -1,7 +1,7 @@
 CC = aarch64-linux-gnu-gcc
 AS = aarch64-linux-gnu-as
 LD = aarch64-linux-gnu-ld
-CFLAGS = -Wall -O0
+CFLAGS = -Wall -O0 -g
 LDFLAGS =
 
 # Files
@@ -10,7 +10,7 @@ TARGET = mm_test
 
 # Build rules
 .PHONY: all
-all: $(TARGET)
+all: clean $(TARGET)
 
 mm_test.o: mm_test.c mm.h
 	$(CC) $(CFLAGS) -c mm_test.c -o mm_test.o
