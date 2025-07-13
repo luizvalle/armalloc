@@ -31,6 +31,28 @@ _mmap_failed_str: .asciz "mem_init() error: mmap().\n"
 // This sets '_mmap_failed_str_size' to the number of bytes in the string
 .equ _mmap_failed_str_size, . - _mmap_failed_str
 
+_mem_sbrk_too_small_str:
+    .ascii "mem_sbrk() error: The requested increment would cause brk to be "
+    .asciz "smaller than heap start.\n"
+
+// Compute the size of the string (including the null terminator)
+// '.': current location counter
+// '. - _mem_sbrk_too_small_str': difference between current address and label
+// This sets '_mem_sbrk_too_small_str_size' to the number of bytes in the string
+.equ _mem_sbrk_too_small_str_size, . - _mem_sbrk_too_small_str
+
+_mem_sbrk_no_space_left_str:
+    .ascii "mem_sbrk() error: The heap does not have enough space left to "
+    .asciz "accomate the request.\n"
+
+// Compute the size of the string (including the null terminator)
+// '.': current location counter
+// '. - _mem_sbrk_no_space_left_str': difference between current address and
+// label
+// This sets '_mem_sbrk_no_space_left_str_size' to the number of bytes in the
+// string
+.equ _mem_sbrk_no_space_left_str_size, . - _mem_sbrk_no_space_left_str
+
 .section .text
 
 .global mem_init
@@ -89,9 +111,11 @@ mem_get_mem_heap_end:
 //   _mem_heap_end   - Set to heap start + requested size
 //
 // Notes:
-//   - The requested size is rounded up to the nearest multiple of PAGE_SIZE_BYTES.
+//   - The requested size is rounded up to the nearest multiple of
+//     PAGE_SIZE_BYTES.
 //   - On error, writes diagnostic messages to STDERR using sys_write.
-//   - Assumes `_mem_heap_start`, `_mem_brk`, `_mem_heap_end` are defined in `.bss`
+//   - Assumes `_mem_heap_start`, `_mem_brk`, `_mem_heap_end` are defined in
+//     `.bss`
 //     as 8-byte variables.
 //   - Assumes constants are defined:
 //       PAGE_SIZE_BYTES, PROT_READ, PROT_WRITE, MAP_PRIVATE, MAP_ANONYMOUS,
@@ -129,11 +153,68 @@ mem_init:
     ldr x19, [sp], #16
     ret
 
-// Extends the heap
+// Adjusts the program break by the increment and returns the new brk value
+// Analogous to the glibc `sbrk()` function.
+//
+// Arguments:
+//   x0 - Increment in bytes:
+//        - Positive: grow the heap
+//        - Negative: shrink the heap
+//        - Zero: return the current break without making any changes
+//
+// Returns:
+//   x0 - Return value:
+//        - On success: the previous value of _mem_brk (i.e., the break before
+//          adjustment)
+//        - On failure:
+//              - MEM_SBRK_NOT_INITIALIZED: mem_init() not called.
+//              - MEM_SBRK_UNDERFLOW: increment would cause underflow.
+//              - MEM_SBRK_OVERFLOW: increment would cause overflow.
+//
+// Clobbers (Registers modified):
+//   x0 - Used for input (incr), temporary values, and return value (old break
+//        or -1)
+//   x1 - Holds address of _mem_brk
+//   x2 - Copy of the requested increment
+//   x3 - Computed new break address
+//   x4 - Temporarily holds _mem_heap_start or _mem_heap_end
+//   x8 - Set to syscall number by `sys_write` in error cases
+//
+// Notes:
+//   - If `x0 == 0`, the function returns the current break without modifying
+//     it.
+//   - On failure, `_mem_brk` remains unchanged.
 mem_sbrk:
+    mov x2, x0  // Save the requested increment
+    ldr x1, =_mem_brk  // Save the address of brk
+    ldr x0, [x1]  // Save the (soon to be) old brk
+    cmp x0, #0
+    b.eq .Lbrk_not_initialized
+    cmp x2, #0
+    b.eq .Lbrk_return  // If we are just querying brk, return fast
+    add x3, x0, x2  // Calculate the new brk
+    ldr x4, =_mem_heap_start
+    ldr x4, [x4]
+    cmp x3, x4
+    b.lt .Lbrk_too_small
+    ldr x4, =_mem_heap_end
+    ldr x4, [x4]
+    cmp x3, x4
+    b.ge .Lbrk_too_big  // heap_end is one past the actual end
+    str x3, [x1]  // Save the new brk
+.Lbrk_return:
+    ret  // Note that x0 contains the old brk
+.Lbrk_not_initialized:
+    mov x0, #MEM_SBRK_NOT_INITIALIZED
+    ret
+.Lbrk_too_small:
+    mov x0, #MEM_SBRK_UNDERFLOW
+    ret
+.Lbrk_too_big:
+    mov x0, #MEM_SBRK_OVERFLOW
     ret
 
-// Deinitializes the memory arena by unmapping the region allocated by mem_init()
+// Deinitializes the arena by unmapping the region allocated by mem_init()
 //
 // Arguments:
 //   None (reads internal global variable `_mem_heap_start`)
@@ -160,7 +241,8 @@ mem_sbrk:
 //     function returns 0 immediately without making a syscall.
 //   - If the arena size is nonpositive (`_mem_heap_end <= _mem_heap_start`),
 //     `munmap` is skipped, but pointers are still reset.
-//   - If `munmap` fails, the function returns -1 and the pointers are not reset.
+//   - If `munmap` fails, the function returns -1 and the pointers are not
+//     reset.
 mem_deinit:
     ldr x0, =_mem_heap_start
     ldr x0, [x0]

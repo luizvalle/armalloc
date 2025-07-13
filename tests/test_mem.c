@@ -7,8 +7,14 @@
 #include <unistd.h>
 #include "mem.h"
 
+#define MEM_SBRK_NOT_INITIALIZED -1
+#define MEM_SBRK_UNDERFLOW -2
+#define MEM_SBRK_OVERFLOW -3
+
 // Helper to cast pointers to byte offsets
 #define PTR_DIFF(a, b) ((ptrdiff_t)((char *)(a) - (char *)(b)))
+// Adds an offset to a pointer
+#define PTR_ADD(ptr, offset) ((void *)((char *)(ptr) + (offset)))
 
 // Register mem_deinit() to be called after every function to make sure all
 // tests are hermetic.
@@ -164,4 +170,89 @@ Test(mem_deinit_special_cases, mem_init_not_called) {
         result, 0,
         "Expected mem_deinit() to return 0, but returned %d",
         result);
+}
+
+TestSuite(mem_sbrk, .fini = (void (*) (void))mem_deinit);
+
+#define MAX_NUM_SBRK_INCREMENTS 10
+
+typedef struct {
+    size_t arena_size;  // Should be > 0
+    size_t num_increments;  // Should be <= MAX_NUM_SBRK_INCREMENTS
+    intptr_t increments[MAX_NUM_SBRK_INCREMENTS];
+} mem_sbrk_test_case_t;
+
+ParameterizedTestParameters(mem_sbrk, mem_sbrk_param_test) {
+    static mem_sbrk_test_case_t sbrk_cases[] = {
+        {
+            .arena_size = 4096,
+            .num_increments = 1,
+            .increments = {0},  // Just query brk once
+        },
+        {
+            .arena_size = 4096,
+            .num_increments = 2,
+            .increments = {1024, 1024},  // Allocate two 1KB blocks
+        },
+        {
+            .arena_size = 4096,
+            .num_increments = 3,
+            // Allocate 2x 2KB + 1 byte (last should fail)
+            .increments = {2048, 2048, 1},
+        },
+        {
+            .arena_size = 8192,
+            .num_increments = 1,
+            // Negative increment on fresh heap (should fail)
+            .increments = {-4096},  
+        },
+        {
+            .arena_size = 4096,
+            .num_increments = 2,
+            // Allocate full arena then shrink it back
+            .increments = {4096, -4096},
+        },
+    };
+    const size_t num_cases = sizeof(sbrk_cases) / sizeof(mem_sbrk_test_case_t);
+    return cr_make_param_array(mem_sbrk_test_case_t, sbrk_cases, num_cases);
+}
+
+ParameterizedTest(mem_sbrk_test_case_t *tc, mem_sbrk, mem_sbrk_param_test) {
+    // Initialize the memory arena
+    const size_t arena_size = tc->arena_size;
+    cr_assert_eq(
+        mem_init(arena_size), 0,
+        "mem_init() failed with arena of size %zu", arena_size);
+
+    //const void * const mem_heap_start = mem_get_mem_heap_start();
+    size_t expected_heap_size = 0;
+
+    for (size_t i = 0; i < tc->num_increments; i++) {
+        const intptr_t increment = tc->increments[i];
+        const void *old_brk = mem_get_mem_brk();
+        const void *result = mem_sbrk(increment);
+        //const void *new_brk = mem_get_mem_brk();
+
+        expected_heap_size += increment;
+        if (expected_heap_size < 0) {
+            cr_assert_eq(
+                (intptr_t)result, MEM_SBRK_UNDERFLOW,
+                "Expected mem_sbrk() to return %d, but it returned %d",
+                MEM_SBRK_UNDERFLOW, result);
+            cr_assert_eq(
+                old_brk, result,
+                "mem_sbrk() should not have changed after UNDERFLOW error");
+        } else if (expected_heap_size > arena_size) {
+            cr_assert_eq(
+                (intptr_t)result, MEM_SBRK_OVERFLOW,
+                "Expected mem_sbrk() to return %d, but it returned %d",
+                MEM_SBRK_OVERFLOW, result);
+            cr_assert_eq(
+                old_brk, result,
+                "mem_sbrk() should not have changed after OVERFLOW error");
+        }
+    }
+
+    // De-initialize the memory arena
+    cr_assert_eq(mem_deinit(), 0, "mem_deinit() failed");
 }

@@ -11,6 +11,7 @@ extern "C" {
 #endif
 
 int mem_init(size_t size);
+void *mem_sbrk(intptr_t increment);
 int mem_deinit();
 
 const void * const mem_get_mem_heap_start();
