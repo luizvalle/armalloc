@@ -1,3 +1,5 @@
+// Defines C function stubs for the functions in mm.s
+
 #ifndef __MM_H__
 #define __MM_H__
 

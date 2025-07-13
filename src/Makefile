@@ -1,3 +1,7 @@
+# Makefile for the main source code
+#
+# Creates a library, `libmem.a`, that can be statically linked with any program
+
 AS = aarch64-linux-gnu-as
 AR = aarch64-linux-gnu-ar
 
