@@ -1,26 +1,19 @@
-CC = aarch64-linux-gnu-gcc
 AS = aarch64-linux-gnu-as
-LD = aarch64-linux-gnu-ld
-CFLAGS = -Wall -O0 -g
-LDFLAGS =
+AR = aarch64-linux-gnu-ar
 
-# Files
-OBJS = mm_test.o mm.o
-TARGET = mm_test
+SRC_S = mm.s mem.s
+OBJ = $(SRC_S:.s=.o)
+LIB = libmem.a
 
-# Build rules
-.PHONY: all
-all: clean $(TARGET)
+.PHONY: all clean
 
-mm_test.o: mm_test.c mm.h
-	$(CC) $(CFLAGS) -c mm_test.c -o mm_test.o
+all: clean $(LIB)
 
 %.o: %.s
-	$(AS) $< -o $@
+	$(AS) -g -o $@ $<
 
-$(TARGET): $(OBJS)
-	$(CC) $(LDFLAGS) -o $@ $(OBJS)
+$(LIB): $(OBJ)
+	$(AR) rcs $@ $^
 
-.PHONY: clean
 clean:
-	rm -f *.o $(TARGET)
+	rm -f $(OBJ) $(LIB)

@@ -1,3 +1,6 @@
+/*
+* sys_macros.s - Macros that call Linux systems calls.
+*/
 .include "unistd.s"
 
 // Issues the Linux syscall to write `length` bytes from memory at `buffer`
