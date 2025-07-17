@@ -1,7 +1,8 @@
 // Defines functions to manage the arena
 
-.include "constants.s"
-.include "sys_macros.s"
+.include "constants.inc"
+.include "sys_macros.inc"
+.include "mm_errno_constants.inc"
 
 .section .bss
 
@@ -59,27 +60,27 @@ _mem_sbrk_no_space_left_str:
 .global mem_sbrk
 .global mem_deinit
 
-.global mem_get_mem_heap_start
-.global mem_get_mem_brk
-.global mem_get_mem_heap_end
+.global get_mem_heap_start
+.global get_mem_brk
+.global get_mem_heap_end
 
 // Retrieves the internal _mem_heap_start value
 // Only used for testing
-mem_get_mem_heap_start:
+get_mem_heap_start:
     ldr x0, =_mem_heap_start
     ldr x0, [x0]
     ret
 
 // Retrieves the internal _mem_brk value
 // Only used for testing
-mem_get_mem_brk:
+get_mem_brk:
     ldr x0, =_mem_brk
     ldr x0, [x0]
     ret
 
 // Retrieves the internal _mem_heap_end value
 // Only used for testing
-mem_get_mem_heap_end:
+get_mem_heap_end:
     ldr x0, =_mem_heap_end
     ldr x0, [x0]
     ret
@@ -153,66 +154,76 @@ mem_init:
     ldr x19, [sp], #16
     ret
 
-// Adjusts the program break by the increment and returns the new brk value
+// Adjusts the program break by the increment, returning the previous break.
+//
 // Analogous to the glibc `sbrk()` function.
 //
 // Arguments:
 //   x0 - Increment in bytes:
 //        - Positive: grow the heap
 //        - Negative: shrink the heap
-//        - Zero: return the current break without making any changes
+//        - Zero: return the current break without making changes
 //
 // Returns:
 //   x0 - Return value:
-//        - On success: the previous value of _mem_brk (i.e., the break before
+//        - On success: the previous value of the program break (before
 //          adjustment)
-//        - On failure:
-//              - MEM_SBRK_NOT_INITIALIZED: mem_init() not called.
-//              - MEM_SBRK_UNDERFLOW: increment would cause underflow.
-//              - MEM_SBRK_OVERFLOW: increment would cause overflow.
+//        - On failure: -1, and `mm_errno` is set to:
+//            - MM_ERR_INTERNAL: mem_init not called
+//            - MM_ERR_INVAL: requested change would move break below heap start
+//            - MM_ERR_NOMEM: requested change would move break above heap end
 //
 // Clobbers (Registers modified):
-//   x0 - Used for input (incr), temporary values, and return value (old break
-//        or -1)
-//   x1 - Holds address of _mem_brk
-//   x2 - Copy of the requested increment
-//   x3 - Computed new break address
-//   x4 - Temporarily holds _mem_heap_start or _mem_heap_end
-//   x8 - Set to syscall number by `sys_write` in error cases
+//   x0 - Input (increment), temporary, and return value
+//   x1 - Address of `_mem_brk`
+//   x2 - Copy of requested increment
+//   x3 - Calculated new break address
+//   x4 - Temporary: heap start or heap end
+//   x8 - Used internally by `set_mm_errno` (syscall stub)
 //
 // Notes:
-//   - If `x0 == 0`, the function returns the current break without modifying
-//     it.
-//   - On failure, `_mem_brk` remains unchanged.
+//   - This routine must be called after `mem_init`, which sets `_mem_brk`.
+//   - The break must remain within bounds: [_mem_heap_start, _mem_heap_end).
+//   - On error, `_mem_brk` is left unchanged and -1 is returned.
+
 mem_sbrk:
-    mov x2, x0  // Save the requested increment
-    ldr x1, =_mem_brk  // Save the address of brk
-    ldr x0, [x1]  // Save the (soon to be) old brk
+    str lr, [sp, #-16]!          // Save return address on stack
+    mov x2, x0                   // Copy requested increment into x2
+    ldr x1, =_mem_brk            // Load address of _mem_brk (heap break pointer)
+    ldr x0, [x1]                 // Load current break (soon to be returned)
     cmp x0, #0
-    b.eq .Lbrk_not_initialized
+    b.eq .Lerr_not_initialized   // Fail if _mem_brk is uninitialized
     cmp x2, #0
-    b.eq .Lbrk_return  // If we are just querying brk, return fast
-    add x3, x0, x2  // Calculate the new brk
-    ldr x4, =_mem_heap_start
+    b.eq .Lbrk_ret               // If increment is 0, return current break
+    add x3, x0, x2               // Compute new break: new_brk = old_brk +
+                                 // increment
+    ldr x4, =_mem_heap_start     // Load heap start
     ldr x4, [x4]
     cmp x3, x4
-    b.lt .Lbrk_too_small
-    ldr x4, =_mem_heap_end
+    b.lt .Lerr_too_small         // Error if new break is below heap start
+    ldr x4, =_mem_heap_end       // Load heap end (exclusive)
     ldr x4, [x4]
     cmp x3, x4
-    b.ge .Lbrk_too_big  // heap_end is one past the actual end
-    str x3, [x1]  // Save the new brk
-.Lbrk_return:
-    ret  // Note that x0 contains the old brk
-.Lbrk_not_initialized:
-    mov x0, #MEM_SBRK_NOT_INITIALIZED
-    ret
-.Lbrk_too_small:
-    mov x0, #MEM_SBRK_UNDERFLOW
-    ret
-.Lbrk_too_big:
-    mov x0, #MEM_SBRK_OVERFLOW
-    ret
+    b.ge .Lerr_too_big           // Error if new break is >= heap end
+    str x3, [x1]                 // Commit the new break to _mem_brk
+    b .Lbrk_ret                  // Return old break (in x0)
+.Lerr_not_initialized:
+    mov x0, #MM_ERR_INTERNAL     // Error: break not initialized
+    bl set_mm_errno
+    b .Lbrk_ret_err
+.Lerr_too_small:
+    mov x0, #MM_ERR_INVAL        // Error: new break is below heap start
+    bl set_mm_errno
+    b .Lbrk_ret_err
+.Lerr_too_big:
+    mov x0, #MM_ERR_NOMEM        // Error: new break exceeds heap end
+    bl set_mm_errno
+    b .Lbrk_ret_err
+.Lbrk_ret_err:
+    mov x0, #-1                  // Return -1 to indicate failure
+.Lbrk_ret:
+    ldr lr, [sp], #16            // Restore return address
+    ret                          // Return to caller
 
 // Deinitializes the arena by unmapping the region allocated by mem_init()
 //

@@ -1,4 +1,4 @@
-.include "sys_macros.s"
+.include "sys_macros.inc"
 
 .section .data
 

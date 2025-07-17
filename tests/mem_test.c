@@ -6,10 +6,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include "mem.h"
-
-#define MEM_SBRK_NOT_INITIALIZED -1
-#define MEM_SBRK_UNDERFLOW -2
-#define MEM_SBRK_OVERFLOW -3
+#include "mm_errno.h"
 
 // Helper to cast pointers to byte offsets
 #define PTR_DIFF(a, b) ((ptrdiff_t)((char *)(a) - (char *)(b)))
@@ -39,9 +36,9 @@ ParameterizedTest(
         init_result, 0, "Expected mem_init() to return 0, but returned %d",
         init_result);
 
-    const void * const init_mem_heap_start = mem_get_mem_heap_start();
-    const void * const init_mem_brk = mem_get_mem_brk();
-    const void * const init_mem_heap_end = mem_get_mem_heap_end();
+    const void * init_mem_heap_start = get_mem_heap_start();
+    const void * init_mem_brk = get_mem_brk();
+    const void * init_mem_heap_end = get_mem_heap_end();
 
     cr_assert_not_null(
         init_mem_heap_start,
@@ -70,9 +67,9 @@ ParameterizedTest(
         deinit_result, 0, "Expected mem_dinit() to return 0, but returned %d",
         deinit_result);
 
-    const void * const deinit_mem_heap_start = mem_get_mem_heap_start();
-    const void * const deinit_mem_brk = mem_get_mem_brk();
-    const void * const deinit_mem_heap_end = mem_get_mem_heap_end();
+    const void * deinit_mem_heap_start = get_mem_heap_start();
+    const void * deinit_mem_brk = get_mem_brk();
+    const void * deinit_mem_heap_end = get_mem_heap_end();
 
     cr_assert_null(
         deinit_mem_heap_start,
@@ -136,9 +133,9 @@ ParameterizedTest(
         strstr(buffer, "arena size must be > 0") != NULL,
         "Expected error message to contain 'arena size must be > 0'");
 
-    const void * const init_mem_heap_start = mem_get_mem_heap_start();
-    const void * const init_mem_brk = mem_get_mem_brk();
-    const void * const init_mem_heap_end = mem_get_mem_heap_end();
+    const void *init_mem_heap_start = get_mem_heap_start();
+    const void *init_mem_brk = get_mem_brk();
+    const void *init_mem_heap_end = get_mem_heap_end();
 
     cr_assert_null(
         init_mem_heap_start,
@@ -191,32 +188,33 @@ ParameterizedTestParameters(mem_sbrk, mem_sbrk_param_test) {
         },
         {
             .arena_size = 4096,
+            .num_increments = 3,
+            .increments = {1024, 1024, 0},  // Allocate two 1KB blocks
+        },
+        {
+            .arena_size = 4096,
+            .num_increments = 4,
+            // Allocate 2x 2KB + 1 byte (secomd to last should fail)
+            .increments = {2048, 2048, 1, 0},
+        },
+        {
+            .arena_size = 8192,
             .num_increments = 2,
-            .increments = {1024, 1024},  // Allocate two 1KB blocks
+            // Negative increment on fresh heap (should fail)
+            .increments = {-4096, 0},  
         },
         {
             .arena_size = 4096,
             .num_increments = 3,
-            // Allocate 2x 2KB + 1 byte (last should fail)
-            .increments = {2048, 2048, 1},
-        },
-        {
-            .arena_size = 8192,
-            .num_increments = 1,
-            // Negative increment on fresh heap (should fail)
-            .increments = {-4096},  
-        },
-        {
-            .arena_size = 4096,
-            .num_increments = 2,
             // Allocate full arena then shrink it back
-            .increments = {4096, -4096},
+            .increments = {4096, -4096, 0},
         },
     };
     const size_t num_cases = sizeof(sbrk_cases) / sizeof(mem_sbrk_test_case_t);
     return cr_make_param_array(mem_sbrk_test_case_t, sbrk_cases, num_cases);
 }
 
+// Tests that different allocation patterns behave as expected
 ParameterizedTest(mem_sbrk_test_case_t *tc, mem_sbrk, mem_sbrk_param_test) {
     // Initialize the memory arena
     const size_t arena_size = tc->arena_size;
@@ -224,35 +222,116 @@ ParameterizedTest(mem_sbrk_test_case_t *tc, mem_sbrk, mem_sbrk_param_test) {
         mem_init(arena_size), 0,
         "mem_init() failed with arena of size %zu", arena_size);
 
-    //const void * const mem_heap_start = mem_get_mem_heap_start();
-    size_t expected_heap_size = 0;
+    const void *heap_start = get_mem_heap_start();
+    const void *heap_end = get_mem_heap_end();
+
+    cr_assert_not_null(heap_start, "get_mem_heap_start() returned NULL");
+    cr_assert_not_null(heap_end, "get_mem_heap_end() returned NULL");
 
     for (size_t i = 0; i < tc->num_increments; i++) {
-        const intptr_t increment = tc->increments[i];
-        const void *old_brk = mem_get_mem_brk();
-        const void *result = mem_sbrk(increment);
-        //const void *new_brk = mem_get_mem_brk();
+        const intptr_t incr = tc->increments[i];
 
-        expected_heap_size += increment;
-        if (expected_heap_size < 0) {
+        set_mm_errno(MM_ERR_NONE);  // Reset mm_errno before calling mem_sbrk()
+
+        const void *prev_brk = get_mem_brk();
+        const void *result = mem_sbrk(incr);
+        const void *new_brk = get_mem_brk();
+
+        const int mm_errno = get_mm_errno();
+
+        if (PTR_ADD(prev_brk, incr) < heap_start) {
+            // Underflow error
             cr_assert_eq(
-                (intptr_t)result, MEM_SBRK_UNDERFLOW,
-                "Expected mem_sbrk() to return %d, but it returned %d",
-                MEM_SBRK_UNDERFLOW, result);
+                result, MEM_SBRK_FAILED,
+                "mem_sbrk(%ld) should have failed but it returned %p",
+                incr, result);
             cr_assert_eq(
-                old_brk, result,
-                "mem_sbrk() should not have changed after UNDERFLOW error");
-        } else if (expected_heap_size > arena_size) {
+                mm_errno, MM_ERR_INVAL,
+                "Expected mm_errno to be set to MM_ERR_INVAL (%d) but was %d",
+                mm_errno, MM_ERR_INVAL);
             cr_assert_eq(
-                (intptr_t)result, MEM_SBRK_OVERFLOW,
-                "Expected mem_sbrk() to return %d, but it returned %d",
-                MEM_SBRK_OVERFLOW, result);
+                new_brk, prev_brk,
+                "Expected the program break to not change but changed "
+                "from %p to %p", prev_brk, new_brk);
+        } else if (PTR_ADD(prev_brk, incr) >= heap_end) {
+            // Overflow error
             cr_assert_eq(
-                old_brk, result,
-                "mem_sbrk() should not have changed after OVERFLOW error");
+                result, MEM_SBRK_FAILED,
+                "mem_sbrk(%ld) should have failed but it returned %p",
+                incr, result);
+            cr_assert_eq(
+                mm_errno, MM_ERR_NOMEM,
+                "Expected mm_errno to be set to MM_ERR_NOMEM (%d) but was %d",
+                mm_errno, MM_ERR_NOMEM);
+            cr_assert_eq(
+                new_brk, prev_brk,
+                "Expected the program break to not change but changed "
+                "from %p to %p", prev_brk, new_brk);
+        } else {
+            // Should succeed
+            cr_assert_neq(
+                result, MEM_SBRK_FAILED,
+                "mem_sbrk(%ld) should not have failed but it returned "
+                "MEM_SBRK_FAILED",
+                incr, result);
+            cr_assert_eq(
+                result, prev_brk,
+                "mem_sbrk(%ld) should return the old break %p, but returned %p",
+                incr, prev_brk, result);
+
+            const void *expected_new_brk = PTR_ADD(prev_brk, incr);
+            cr_assert_eq(
+                new_brk, expected_new_brk,
+                "After mem_sbrk(%ld), expected new break %p but got %p",
+                incr, expected_new_brk, new_brk);
+            cr_assert_eq(
+                mm_errno, MM_ERR_NONE,
+                "mm_errno should be MM_ERR_NONE (%d) but is %d",
+                MM_ERR_NONE, mm_errno);
         }
     }
 
     // De-initialize the memory arena
     cr_assert_eq(mem_deinit(), 0, "mem_deinit() failed");
+}
+
+// Makes sure mem_sbrk() handles an uninitialized heap correctly
+Test(mem_sbrk, mem_init_not_called) {
+    const intptr_t increments[] = {-1024, 0, 1, 1024, 4096};
+    const size_t num_increments = sizeof(increments) / sizeof(intptr_t);
+
+    const void *heap_start = get_mem_heap_start();
+    const void *heap_end = get_mem_heap_end();
+
+    // Since mem_init() was never called, heap pointers should be NULL
+    cr_assert_null(
+        heap_start,
+        "get_mem_heap_start() returned %p but expected NULL", heap_start);
+    cr_assert_null(
+        heap_end,
+        "get_mem_heap_end() returned %p but expected NULL", heap_end);
+
+    for (size_t i = 0; i < num_increments; i++) {
+        const intptr_t incr = increments[i];
+
+        set_mm_errno(MM_ERR_NONE);  // Reset mm_errno before calling mem_sbrk()
+
+        const void *prev_brk = get_mem_brk();
+        const void *result = mem_sbrk(incr);
+        const void *new_brk = get_mem_brk();
+        const int mm_errno = get_mm_errno();
+
+        cr_assert_eq(
+            result, MEM_SBRK_FAILED,
+            "mem_sbrk(%ld) should have failed but it returned %p",
+             incr, result);
+        cr_assert_eq(
+            mm_errno, MM_ERR_INTERNAL,
+             "Expected mm_errno to be set to MM_ERR_INTERNAL (%d) but was %d",
+             mm_errno, MM_ERR_INTERNAL);
+        cr_assert_eq(
+                new_brk, prev_brk,
+                "Expected the program break to not change but changed "
+                "from %p to %p", prev_brk, new_brk);
+    }
 }

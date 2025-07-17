@@ -5,18 +5,19 @@ CFLAGS = -Wall -O0 -g
 SRCDIR = ../src
 LIB = $(SRCDIR)/libmem.a
 
-TEST_C = test_mem.c
-TEST_MEM = test_mem
+MEM_TEST_C = mem_test.c
+MEM_TEST_HEADERS = ../src/mem.h ../src/mm_errno.h
+MEM_TEST = mem_test
 
 .PHONY: all clean run_tests
 
-all: run_tests
+all: clean $(MEM_TEST)
 
-$(TEST_MEM): $(TEST_C) $(LIB)
-	$(CC) $(CFLAGS) -I$(SRCDIR) -o $@ $(TEST_C) $(LIB) -lcriterion
+$(MEM_TEST): $(MEM_TEST_C) $(MEM_TEST_HEADERS) $(LIB)
+	$(CC) $(CFLAGS) -I$(SRCDIR) -o $@ $(MEM_TEST_C) $(LIB) -lcriterion
 
-run_tests: $(TEST_MEM)
-	./$(TEST_MEM)
+run_tests: $(MEM_TEST)
+	./$(MEM_TEST)
 
 clean:
-	rm -f $(TEST_MEM)
+	rm -f $(MEM_TEST)

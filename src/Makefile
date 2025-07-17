@@ -5,7 +5,7 @@
 AS = aarch64-linux-gnu-as
 AR = aarch64-linux-gnu-ar
 
-SRC_S = mm.s mem.s
+SRC_S = mm.s mem.s mm_errno.s
 OBJ = $(SRC_S:.s=.o)
 LIB = libmem.a
 

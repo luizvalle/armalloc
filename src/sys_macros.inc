@@ -1,6 +1,8 @@
 // Defines some macros that call Linux systems calls.
 
-.include "unistd.s"
+.equ SYS_WRITE,					64	 // write to a file descriptor
+.equ SYS_MMAP,                  222  // creates a new mapping in the virtual address space
+.equ SYS_MUNMAP,                215  // unmap the region created by mmap
 
 // Issues the Linux syscall to write `length` bytes from memory at `buffer`
 // to the file descriptor `fd`.
@@ -90,6 +92,36 @@
     svc 0
 .endm
 
+// Issues the Linux syscall to unmap a region of memory.
+//
+// This macro wraps the `munmap` system call which removes memory mappings
+// previously created with `mmap` or similar.
+//
+// Syntax:
+//   sys_munmap addr, length
+//
+// Parameters:
+//   addr   [Register]
+//          - Starting address of the memory region to unmap
+//          - Must be page-aligned
+//
+//   length [Immediate or Register]
+//          - Size of the memory region in bytes
+//          - Must be a multiple of the system page size
+//
+// Registers Modified:
+//   x0 - Set to `addr` (starting address)
+//   x1 - Set to `length` (size of the region)
+//   x8 - Set to syscall number
+//   Other registers are unaffected
+//
+// Return Value:
+//   On success: x0 = 0
+//   On failure: x0 = -1
+//
+// Notes:
+//   - The caller is responsible for ensuring alignment and validity of the address and length.
+//   - This syscall should not be used to unmap regions not previously mapped with `mmap`.
 .macro sys_munmap addr, length
     mov x0, \addr
     mov x1, \length
