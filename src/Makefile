@@ -1,23 +1,43 @@
-# Makefile for the main source code
+# Makefile for building the static library `libarmalloc64.a`
 #
-# Creates a library, `libmem.a`, that can be statically linked with any program
+# Usage:
+#   make BUILD=debug all        - Build in debug mode (with symbols, no optimization)
+#   make BUILD=release all      - Build in release mode (optimized, no debug symbols)
+#   make BUILD=debug clean      - Remove debug build artifacts
+#   make BUILD=release clean    - Remove release build artifacts
+#
+# Shortcuts:
+#   make debug                  - Equivalent to: make BUILD=debug all
+#   make release                - Equivalent to: make BUILD=release all
+#
+# Produces:
+#   ../build/debug/libarmalloc64.a or ../build/release/libarmalloc64.a
 
-AS = aarch64-linux-gnu-as
-AR = aarch64-linux-gnu-ar
+include ../config.mk
 
 SRC_S = mm.s mem.s mm_errno.s
 OBJ = $(SRC_S:.s=.o)
-LIB = libmem.a
+OBJ := $(addprefix $(BUILDDIR)/, $(notdir $(OBJ)))
+LIB = $(BUILDDIR)/libarmalloc64.a
 
-.PHONY: all clean
+.PHONY: all clean debug release
 
 all: clean $(LIB)
 
-%.o: %.s
-	$(AS) -g -o $@ $<
+$(BUILDDIR):
+	mkdir -p $(BUILDDIR)
+
+$(BUILDDIR)/%.o: %.s | $(BUILDDIR)
+	$(AS) $(ASFLAGS) -o $@ $<
 
 $(LIB): $(OBJ)
 	$(AR) rcs $@ $^
 
 clean:
 	rm -f $(OBJ) $(LIB)
+
+debug:
+	$(MAKE) BUILD=debug all
+
+release:
+	$(MAKE) BUILD=release all

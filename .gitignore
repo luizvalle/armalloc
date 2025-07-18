@@ -64,4 +64,4 @@ config.status
 autom4te.cache/
 
 # Binaries
-mem_test
+build/
