@@ -13,163 +13,342 @@
 // Adds an offset to a pointer
 #define PTR_ADD(ptr, offset) ((void *)((char *)(ptr) + (offset)))
 
-// Register mem_deinit() to be called after every function to make sure all
-// tests are hermetic.
-TestSuite(mem_init, .fini = (void (*)(void))mem_deinit);
+TestSuite(mem_init);
 
-ParameterizedTestParameters(mem_init, successful_mem_init_param_test) {
-    static size_t sizes[] = {
-        100,       // Less than a page
-        4096 * 1,  // 1 page
-        4096 * 4,  // 4 pages
-        8192,      // 2 pages (non-multiple input)
-        12345      // Arbitrary size
+typedef struct {
+    size_t arena_size;
+    int expected_ret_value;
+    int expected_mm_errno;
+} mem_init_arena_size_test_case_t;
+
+ParameterizedTestParameters(mem_init, parameterized_arena_size_test) {
+    static mem_init_arena_size_test_case_t init_cases[] = {
+        {
+            // Invalid size (0)
+            .arena_size = 0,
+            .expected_ret_value = -1,
+            .expected_mm_errno = MM_ERR_INVAL,
+        },
+        {
+            // Less than a page
+            .arena_size = 10,
+            .expected_ret_value = 0,
+            .expected_mm_errno = MM_ERR_NONE,
+        },
+        {
+            // A full page
+            .arena_size = 4096,
+            .expected_ret_value = 0,
+            .expected_mm_errno = MM_ERR_NONE,
+        },
+        {
+            // 4 pages
+            .arena_size = 4096 * 4,
+            .expected_ret_value = 0,
+            .expected_mm_errno = MM_ERR_NONE,
+        },
+        {
+            // A large random number
+            .arena_size = 12345,
+            .expected_ret_value = 0,
+            .expected_mm_errno = MM_ERR_NONE,
+        },
     };
-    return cr_make_param_array(size_t, sizes, sizeof(sizes) / sizeof(size_t));
+    const size_t num_cases =
+        sizeof(init_cases) / sizeof(mem_init_arena_size_test_case_t);
+    return cr_make_param_array(
+        mem_init_arena_size_test_case_t, init_cases, num_cases);
 }
 
-// Tests that calling mem_init() with various valid sizes succeeds.
+// Tests that calling mem_init() with various sizes has the expected results
 ParameterizedTest(
-    const size_t *arena_size, mem_init, successful_mem_init_param_test) {
-    const int init_result = mem_init(*arena_size);
-    cr_assert_eq(
-        init_result, 0, "Expected mem_init() to return 0, but returned %d",
-        init_result);
+    const mem_init_arena_size_test_case_t *tc,
+    mem_init, parameterized_arena_size_test) {
+    set_mm_errno(MM_ERR_NONE);  // Reset mm_errno
 
-    const void * init_mem_heap_start = get_mem_heap_start();
-    const void * init_mem_brk = get_mem_brk();
-    const void * init_mem_heap_end = get_mem_heap_end();
-
-    cr_assert_not_null(
-        init_mem_heap_start,
-        "mem_heap_start should not be NULL after mem_init");
+    const int init_result = mem_init(tc->arena_size);
 
     cr_assert_eq(
-        init_mem_heap_start,
-        init_mem_brk,
-        "mem_brk (%p) should be equal to mem_heap_start (%p) after mem_init()",
-        init_mem_brk,
-        init_mem_heap_start);
+        init_result, tc->expected_ret_value,
+        "Expected mem_init(%zu) to return %d, but returned %d",
+        tc->arena_size, tc->expected_ret_value, init_result);
+    
+    const int init_mm_errno = get_mm_errno();
 
-    cr_assert_gt(init_mem_heap_end, init_mem_heap_start,
-              "mem_heap_end (%p) should be greater than mem_heap_start (%p) "
-              "after mem_init()",
-              init_mem_heap_end, init_mem_heap_start);
+    cr_assert_eq(
+        init_mm_errno, tc->expected_mm_errno,
+        "Expected mem_init(%zu) to set mm_errno to %d but it is set to %d",
+        tc->arena_size, tc->expected_mm_errno, init_mm_errno);
 
-    const ptrdiff_t actual_size = PTR_DIFF(
-        init_mem_heap_end, init_mem_heap_start);
-    cr_assert(actual_size >= (ptrdiff_t)*arena_size,
-              "Allocated size (%td) should be at least %zu bytes",
-              actual_size, *arena_size);
+    const void *init_mem_heap_start = _get_mem_heap_start();
+    const void *init_mem_brk = _get_mem_brk();
+    const void *init_mem_heap_end = _get_mem_heap_end();
+
+    if (tc->expected_ret_value == 0) {
+        // Expected success
+        cr_assert_not_null(
+            init_mem_heap_start,
+            "Expected mem_init(%zu) to set mem_heap_start to a non-NULL value",
+            tc->arena_size);
+            
+        cr_assert_eq(
+            init_mem_heap_start, init_mem_brk,
+            "Expected mem_init(%zu) to set heap_start (%p) = brk (%p)",
+            tc->arena_size,
+            init_mem_heap_start,
+            init_mem_brk);
+        
+        cr_assert_gt(init_mem_heap_end, init_mem_heap_start,
+            "Expected mem_init(%zu) to set heap_end (%p) > heap_start (%p)",
+            tc->arena_size, init_mem_heap_end, init_mem_heap_start); 
+
+        const ptrdiff_t actual_size = PTR_DIFF(
+            init_mem_heap_end, init_mem_heap_start);
+        cr_assert(actual_size >= (ptrdiff_t)tc->arena_size,
+                "Expected mem_init(%zu) to allocate at least %zu bytes, but "
+                "allocated only %td bytes",
+                tc->arena_size, tc->arena_size, actual_size);
+
+        set_mm_errno(MM_ERR_NONE);
+
+        const int deinit_result = mem_deinit();
+        const int deinit_mm_errno = get_mm_errno();
+
+        cr_assert_eq(
+            deinit_result, 0,
+            "Expected mem_deinit() to return 0, but returned %d",
+            deinit_result);
+    
+        cr_assert_eq(
+            deinit_mm_errno, MM_ERR_NONE,
+            "Expected mem_deinit() to leave mm_errno as MM_ERR_NONE but got %d",
+            deinit_mm_errno);
+
+        const void *deinit_mem_heap_start = _get_mem_heap_start();
+        const void *deinit_mem_brk = _get_mem_brk();
+        const void *deinit_mem_heap_end = _get_mem_heap_end();
+
+        cr_assert_null(
+            deinit_mem_heap_start,
+            "Expected mem_deinit() to set mem_heap_start (%p) to NULL",
+            deinit_mem_heap_start);
+
+        cr_assert_null(
+            deinit_mem_brk,
+            "Expected mem_deinit() to set mem_brk (%p) to NULL",
+            deinit_mem_brk);
+    
+        cr_assert_null(
+            deinit_mem_heap_end,
+            "Expected mem_deinit() to set mem_heap_end (%p) to NULL",
+            deinit_mem_heap_end);
+    } else {
+        // Expected failure
+        cr_assert_null(
+            init_mem_heap_start,
+            "Expected mem_init(%zu) to leave mem_heap_start (%p) NULL",
+            tc->arena_size, init_mem_heap_start);
+
+        cr_assert_null(
+            init_mem_brk,
+            "Expected mem_init(%zu) to leave mem_brk (%p) NULL",
+            tc->arena_size, init_mem_brk);
+        
+        cr_assert_null(
+            init_mem_heap_end,
+            "Expected mem_init(%zu) to leave mem_heap_end (%p) NULL",
+            tc->arena_size, init_mem_heap_end);
+    }
+}
+
+// Tests that calling mem_init twice fails as expected
+Test(mem_init, mem_init_called_twice_fail) {
+    const size_t arena_size = 4096;
+    const int first_init_ret = mem_init(arena_size);
+
+    cr_assert_eq(
+        first_init_ret, 0,
+        "Expected the first mem_init(%zu) to succeed, but it failed");
+    
+    set_mm_errno(MM_ERR_NONE);
+
+    const int second_init_ret = mem_init(arena_size);
+
+    cr_assert_eq(
+        second_init_ret, -1,
+        "Expected the second mem_init(%zu) to fail by returning -1, but it "
+        "returned %d",
+        arena_size, second_init_ret);
+    
+    const int mm_errno = get_mm_errno();
+
+    cr_assert_eq(
+        mm_errno, MM_ERR_INTERNAL,
+        "Expected the second mem_init(%zu) to set mm_errno to "
+        "MM_ERR_INTERNAL but it was set to %d",
+        arena_size, mm_errno);
+
+    mem_deinit();
+}
+
+// Tests that calling mem_init a second time after a failed first attempt
+// succeeds.
+Test(mem_init, mem_init_recover_after_failed_init) {
+    const int first_init_ret = mem_init(0);
+
+    cr_assert_eq(
+        first_init_ret, -1,
+        "Expected the first mem_init(0) to fail, but it succeeded");
+    
+    set_mm_errno(MM_ERR_NONE);
+
+    const size_t arena_size = 4096;
+
+    const int second_init_ret = mem_init(arena_size);
+    const int mm_errno = get_mm_errno();
+
+    cr_assert_eq(
+        second_init_ret, 0,
+        "Expected the second mem_init(%zu) to succeed but it failed with "
+        "mm_errno set to %d",
+        arena_size, mm_errno);
+
+    mem_deinit();
+}
+
+// Tests that calling mem_init a second time after mem_deinit succeeds
+Test(mem_init, mem_init_recover_after_deinit) {
+    const size_t arena_size = 4096;
+    const int first_init_ret = mem_init(arena_size);
+
+    cr_assert_eq(
+        first_init_ret, 0,
+        "Expected the first mem_init(%zu) to succeed, but it failed");
+
+    cr_assert_eq(mem_deinit(), 0, "Expected mem_deinit() to succeed");
+    
+    set_mm_errno(MM_ERR_NONE);
+
+    const int second_init_ret = mem_init(arena_size);
+
+    cr_assert_eq(
+        second_init_ret, 0,
+        "Expected the second mem_init(%zu) to succeed but it failed",
+        arena_size);
+    
+    const int mm_errno = get_mm_errno();
+
+    cr_assert_eq(
+        mm_errno, MM_ERR_NONE,
+        "Expected the second mem_init(%zu) to set mm_errno to "
+        "MM_ERR_NONE but it was set to %d",
+        arena_size, mm_errno);
+
+    mem_deinit();
+}
+
+TestSuite(mem_deinit);
+
+// Tests that mem_deinit() works as expected after a successful mem_init()
+Test(mem_deinit, successful_after_successful_mem_init) {
+    const size_t arena_size = 4096;
+    cr_assert_eq(
+        mem_init(arena_size), 0,
+        "Expected mem_init(%zu) to succeed but it failed",
+        arena_size);
+        
+    set_mm_errno(MM_ERR_NONE);
 
     const int deinit_result = mem_deinit();
+    const int deinit_mm_errno = get_mm_errno();
+
     cr_assert_eq(
-        deinit_result, 0, "Expected mem_dinit() to return 0, but returned %d",
+        deinit_result, 0,
+        "Expected mem_deinit() to return 0, but returned %d",
         deinit_result);
 
-    const void * deinit_mem_heap_start = get_mem_heap_start();
-    const void * deinit_mem_brk = get_mem_brk();
-    const void * deinit_mem_heap_end = get_mem_heap_end();
+    cr_assert_eq(
+        deinit_mm_errno, MM_ERR_NONE,
+        "Expected mem_deinit() to leave mm_errno as MM_ERR_NONE but got %d",
+        deinit_mm_errno);
+
+    const void *deinit_mem_heap_start = _get_mem_heap_start();
+    const void *deinit_mem_brk = _get_mem_brk();
+    const void *deinit_mem_heap_end = _get_mem_heap_end();
 
     cr_assert_null(
         deinit_mem_heap_start,
-        "mem_heap_start (%p) should be NULL after mem_deinit()",
+        "Expected mem_deinit() to set mem_heap_start (%p) to NULL",
         deinit_mem_heap_start);
 
     cr_assert_null(
         deinit_mem_brk,
-        "mem_brk (%p) should be NULL after mem_deinit()",
+        "Expected mem_deinit() to set mem_brk (%p) to NULL",
         deinit_mem_brk);
 
     cr_assert_null(
         deinit_mem_heap_end,
-        "mem_heap_end (%p) should be NULL after mem_deinit()",
+        "Expected mem_deinit() to set mem_heap_end (%p) to NULL",
         deinit_mem_heap_end);
 }
 
-ParameterizedTestParameters(mem_init, invalid_mem_init_param_test) {
-    static size_t sizes[] = {
-        -4096,
-        -1,
-        0,
-    };
-    return cr_make_param_array(size_t, sizes, sizeof(sizes) / sizeof(size_t));
-}
-
-// Tests that calling mem_init() with various invalid sizes fails.
-ParameterizedTest(
-    const size_t *arena_size, mem_init, invalid_mem_init_param_test) {
-    // Create a pipe to capture the stderr of the function.
-    int pipefd[2];
-    cr_assert(pipe(pipefd) == 0, "Failed to create pipe");
-
-    // Save original stderr
-    const int saved_stderr = dup(STDERR_FILENO);
-    cr_assert(saved_stderr != -1, "Failed to duplicate stderr");
-
-    // Redirect stderr to pipe
-    dup2(pipefd[1], STDERR_FILENO);
-    close(pipefd[1]);
-
-    const int init_result = mem_init(*arena_size);
-
-    // Retrieve the error message
-    char buffer[256] = {0};
-    const ssize_t count = read(pipefd[0], buffer, sizeof(buffer) - 1);
-
-    // Restore stderr
-    dup2(saved_stderr, STDERR_FILENO);
-    close(saved_stderr);
-    close(pipefd[0]);
-
-    cr_assert_lt(
-        init_result, 0,
-        "Expected mem_init() to return a negative number (error), but "
-        "returned %d",
-        init_result);
-
-    cr_assert(count > 0, "Expected error message to be printed to stderr");
-    cr_assert(
-        strstr(buffer, "arena size must be > 0") != NULL,
-        "Expected error message to contain 'arena size must be > 0'");
-
-    const void *init_mem_heap_start = get_mem_heap_start();
-    const void *init_mem_brk = get_mem_brk();
-    const void *init_mem_heap_end = get_mem_heap_end();
+// Tests that mem_deinit() is safe to call even if mem_init() was never called
+Test(mem_deinit, mem_deinit_succeeds_after_no_mem_init) {
+    const void *mem_heap_start = _get_mem_heap_start();
+    const void *mem_brk = _get_mem_brk();
+    const void *mem_heap_end = _get_mem_heap_end();
 
     cr_assert_null(
-        init_mem_heap_start,
-        "mem_heap_start (%p) should be NULL after mem_init()",
-        init_mem_heap_start);
+        mem_heap_start,
+        "Expected mem_heap_start (%p) to be NULL",
+        mem_heap_start);
 
     cr_assert_null(
-        init_mem_brk,
-        "mem_brk (%p) should be NULL after mem_init()",
-        init_mem_brk);
+        mem_brk,
+        "Expected mem_brk (%p) to be NULL",
+        mem_brk);
 
     cr_assert_null(
-        init_mem_heap_end,
-        "mem_heap_end (%p) should be NULL after mem_init()",
-        init_mem_heap_end);
-}
+        mem_heap_end,
+        "Expected mem_heap_end (%p) to be NULL",
+        mem_heap_end);
 
-// mem_deinit() is also used in the mem_init() tests to make sure the tests are
-// hermetic. Those tests check if mem_deinit() works on successful uses of
-// mem_init(). Hence, we do not test success here.
-TestSuite(mem_deinit_special_cases);
+    set_mm_errno(MM_ERR_NONE);
 
-// Tests that calling mem_deinit() without first calling mem_init() has no
-// effect.
-Test(mem_deinit_special_cases, mem_init_not_called) {
-    const int result = mem_deinit();
+    const int deinit_result = mem_deinit();
+    const int deinit_mm_errno = get_mm_errno();
 
     cr_assert_eq(
-        result, 0,
+        deinit_result, 0,
         "Expected mem_deinit() to return 0, but returned %d",
-        result);
+        deinit_result);
+
+    cr_assert_eq(
+        deinit_mm_errno, MM_ERR_NONE,
+        "Expected mem_deinit() to leave mm_errno as MM_ERR_NONE but got %d",
+        deinit_mm_errno);
+
+    const void *deinit_mem_heap_start = _get_mem_heap_start();
+    const void *deinit_mem_brk = _get_mem_brk();
+    const void *deinit_mem_heap_end = _get_mem_heap_end();
+
+    cr_assert_null(
+        deinit_mem_heap_start,
+        "Expected mem_deinit() to set mem_heap_start (%p) to NULL",
+        deinit_mem_heap_start);
+
+    cr_assert_null(
+        deinit_mem_brk,
+        "Expected mem_deinit() to set mem_brk (%p) to NULL",
+        deinit_mem_brk);
+
+    cr_assert_null(
+        deinit_mem_heap_end,
+        "Expected mem_deinit() to set mem_heap_end (%p) to NULL",
+        deinit_mem_heap_end);
 }
 
-TestSuite(mem_sbrk, .fini = (void (*) (void))mem_deinit);
+TestSuite(mem_sbrk);
 
 #define MAX_NUM_SBRK_INCREMENTS 10
 
@@ -222,8 +401,8 @@ ParameterizedTest(mem_sbrk_test_case_t *tc, mem_sbrk, mem_sbrk_param_test) {
         mem_init(arena_size), 0,
         "mem_init() failed with arena of size %zu", arena_size);
 
-    const void *heap_start = get_mem_heap_start();
-    const void *heap_end = get_mem_heap_end();
+    const void *heap_start = _get_mem_heap_start();
+    const void *heap_end = _get_mem_heap_end();
 
     cr_assert_not_null(heap_start, "get_mem_heap_start() returned NULL");
     cr_assert_not_null(heap_end, "get_mem_heap_end() returned NULL");
@@ -233,9 +412,9 @@ ParameterizedTest(mem_sbrk_test_case_t *tc, mem_sbrk, mem_sbrk_param_test) {
 
         set_mm_errno(MM_ERR_NONE);  // Reset mm_errno before calling mem_sbrk()
 
-        const void *prev_brk = get_mem_brk();
+        const void *prev_brk = _get_mem_brk();
         const void *result = mem_sbrk(incr);
-        const void *new_brk = get_mem_brk();
+        const void *new_brk = _get_mem_brk();
 
         const int mm_errno = get_mm_errno();
 
@@ -300,8 +479,8 @@ Test(mem_sbrk, mem_init_not_called) {
     const intptr_t increments[] = {-1024, 0, 1, 1024, 4096};
     const size_t num_increments = sizeof(increments) / sizeof(intptr_t);
 
-    const void *heap_start = get_mem_heap_start();
-    const void *heap_end = get_mem_heap_end();
+    const void *heap_start = _get_mem_heap_start();
+    const void *heap_end = _get_mem_heap_end();
 
     // Since mem_init() was never called, heap pointers should be NULL
     cr_assert_null(
@@ -316,9 +495,9 @@ Test(mem_sbrk, mem_init_not_called) {
 
         set_mm_errno(MM_ERR_NONE);  // Reset mm_errno before calling mem_sbrk()
 
-        const void *prev_brk = get_mem_brk();
+        const void *prev_brk = _get_mem_brk();
         const void *result = mem_sbrk(incr);
-        const void *new_brk = get_mem_brk();
+        const void *new_brk = _get_mem_brk();
         const int mm_errno = get_mm_errno();
 
         cr_assert_eq(

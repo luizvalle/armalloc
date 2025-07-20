@@ -25,13 +25,16 @@ void *mem_sbrk(intptr_t increment);
 int mem_deinit(void);
 
 // Returns the start address of the heap memory region.
-const void *get_mem_heap_start(void);
+// NOTE: Used for testing only.
+const void *_get_mem_heap_start(void);
 
 // Returns the current program break (end of allocated heap).
-const void *get_mem_brk(void);
+// NOTE: Used for testing only.
+const void *_get_mem_brk(void);
 
 // Returns the end address (limit) of the heap memory region.
-const void *get_mem_heap_end(void);
+// NOTE: Used for testing only.
+const void *_get_mem_heap_end(void);
 
 #ifdef __cplusplus
 }
