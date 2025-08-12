@@ -169,6 +169,163 @@ seg_listp: .skip NUM_SEG_LISTS * PTR_SIZE_BYTES
 .endm
 
 
+// Sets the previous pointer (fprev) in a memory allocator header's links field.
+//
+// Syntax:
+//   SET_FPREV header_addr_reg, fprev_addr_reg
+//
+// Parameters:
+//   header_addr_reg [Register]
+//                   - Register containing the address of the header structure
+//                   - Points to the header whose fprev field will be modified
+//                   - Register value is preserved (non-destructive operation)
+//
+//   fprev_addr_reg  [Register]
+//                   - Register containing the address to store in fprev field
+//                   - Can be any valid pointer address or NULL
+//                   - Register value is preserved (non-destructive operation)
+//
+// Behavior:
+//   - Stores fprev_addr_reg value at header_addr + WORD_SIZE_BYTES (fprev field)
+//   - Does not modify any other header fields
+//
+// Memory Layout:
+//   header_addr + 0:                 64-bit header bitfield (size/unused/allocated)
+//   header_addr + WORD_SIZE_BYTES:   fprev pointer (modified)
+//   header_addr + DWORD_SIZE_BYTES:  fnext pointer (unchanged)
+//
+// Example Usage:
+//   mov x0, #header_addr          // Address of current header
+//   mov x1, #prev_header_addr     // Address of previous header
+//   SET_FPREV x0, x1              // current->fprev = prev_header
+//
+//   // For circular initialization:
+//   SET_FPREV x0, x0              // header->fprev = header (self-reference)
+//
+// Registers Modified:
+//   None - both input registers are preserved
+//   Memory at header_addr + WORD_SIZE_BYTES is modified
+.macro SET_FPREV header_addr_reg, fprev_addr_reg
+    str \fprev_addr_reg, [\header_addr_reg, #WORD_SIZE_BYTES]
+.endm
+
+
+// Gets the previous pointer (fprev) from a memory allocator header's links field.
+//
+// Syntax:
+//   GET_FPREV header_addr_reg, output_reg
+//
+// Parameters:
+//   header_addr_reg [Register]
+//                   - Register containing the address of the header structure
+//                   - Points to the header whose fprev field will be read
+//                   - Register value is preserved (non-destructive operation)
+//
+//   output_reg      [Register]
+//                   - Register that will receive the fprev pointer value
+//
+// Behavior:
+//   - Loads the pointer value from header_addr + WORD_SIZE_BYTES (fprev field)
+//   - Stores the result in output_reg
+//   - Does not modify the header or any other fields
+//
+// Example Usage:
+//   mov x0, #header_addr          // Address of header
+//   GET_FPREV x0, x1              // x1 = header->fprev
+//   cmp x1, x0                    // Compare with self (circular check)
+//   b.eq is_circular              // Branch if self-referencing
+//
+//   cbz x1, list_start            // Branch if fprev is NULL (start of list)
+//
+// Registers Modified:
+//   output_reg      - Set to the fprev pointer value
+//   header_addr_reg - Unchanged (preserved)
+.macro GET_FPREV header_addr_reg, output_reg
+    ldr \output_reg, [\header_addr_reg, #WORD_SIZE_BYTES]
+.endm
+
+
+// Sets the next pointer (fnext) in a memory allocator header's links field.
+//
+// Syntax:
+//   SET_FNEXT header_addr_reg, fnext_addr_reg
+//
+// Parameters:
+//   header_addr_reg [Register]
+//                   - Register containing the address of the header structure
+//                   - Points to the header whose fnext field will be modified
+//                   - Register value is preserved (non-destructive operation)
+//
+//   fnext_addr_reg  [Register]
+//                   - Register containing the address to store in fnext field
+//                   - Can be any valid pointer address or NULL
+//                   - Register value is preserved (non-destructive operation)
+//
+// Behavior:
+//   - Stores fnext_addr_reg value at header_addr + DWORD_SIZE_BYTES
+//   - Equivalent to: header->links.fnext = fnext_addr
+//   - Does not modify any other header fields
+//
+// Memory Layout:
+//   header_addr + 0:                 64-bit header bitfield (size/unused/allocated)
+//   header_addr + WORD_SIZE_BYTES:   fprev pointer (unchanged)
+//   header_addr + DWORD_SIZE_BYTES:  fnext pointer (modified)
+//
+// Example Usage:
+//   mov x0, #header_addr          // Address of current header
+//   mov x1, #next_header_addr     // Address of next header
+//   SET_FNEXT x0, x1              // current->fnext = next_header
+//
+//   // For circular initialization:
+//   SET_FNEXT x0, x0              // header->fnext = header (self-reference)
+//
+//   // For list termination:
+//   mov x1, #0                    // NULL pointer
+//   SET_FNEXT x0, x1              // Mark end of list
+//
+// Registers Modified:
+//   None - both input registers are preserved
+//   Memory at header_addr + DWORD_SIZE_BYTES is modified
+.macro SET_FNEXT header_addr_reg, fnext_addr_reg
+    str \fnext_addr_reg, [\header_addr_reg, #DWORD_SIZE_BYTES]
+.endm
+
+
+// Gets the next pointer (fnext) from a memory allocator header's links field.
+//
+// Syntax:
+//   GET_FNEXT header_addr_reg, output_reg
+//
+// Parameters:
+//   header_addr_reg [Register]
+//                   - Register containing the address of the header structure
+//                   - Points to the header whose fnext field will be read
+//                   - Register value is preserved (non-destructive operation)
+//
+//   output_reg      [Register]
+//                   - Register that will receive the fnext pointer value
+//
+// Behavior:
+//   - Loads the pointer value from header_addr + DWORD_SIZE_BYTES (fnext field)
+//   - Stores the result in output_reg
+//   - Does not modify the header or any other fields
+//
+// Example Usage:
+//   mov x0, #header_addr          // Address of header
+//   GET_FNEXT x0, x1              // x1 = header->fnext
+//   cbz x1, list_end              // Branch if fnext is NULL (end of list)
+//
+//   cmp x1, x0                    // Compare with self (circular check)
+//   b.eq is_circular              // Branch if self-referencing
+//
+// Registers Modified:
+//   output_reg      - Set to the fnext pointer value
+//   header_addr_reg - Unchanged (preserved)
+.macro GET_FNEXT header_addr_reg, output_reg
+    ldr \output_reg, [\header_addr_reg, #DWORD_SIZE_BYTES]
+.endm
+
+
 // Initializes the memory manager.
 mm_init:
     str lr, [sp, #-16]!
@@ -180,12 +337,13 @@ mm_init:
     // mem_sbrk(2 + NUM_SEG_LISTS * 4)
     bl mem_sbrk
     cmp x0, #-1
-    b.eq .Linit_ret  // mem_sbrk(2 + NUM_SEG_LISTS * 4) failed
+    b.eq .Linit_ret  // mem_sbrk failed
     str xzr, [x0], #WORD_SIZE_BYTES  // Alignment padding
     // Initialize the segregated free lists
-    mov x1, #NUM_SEG_LISTS
+    mov x1, #NUM_SEG_LISTS - 1
 .Linit_seglists_loop:
-    // TODO: Implement this
+   subs x1, x1, #1
+   b.le .Linit_seglists_loop
 .Linit_ret:
     ldr lr, [sp], #16
     ret
