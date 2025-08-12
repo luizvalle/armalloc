@@ -334,16 +334,41 @@ mm_init:
     cbnz x0, .Linit_ret
     // Calculate the number of words needed for the empty list
     mov x0, #2 + NUM_SEG_LISTS * 4
-    // mem_sbrk(2 + NUM_SEG_LISTS * 4)
-    bl mem_sbrk
+    bl mem_sbrk  // mem_sbrk(2 + NUM_SEG_LISTS * 4)
     cmp x0, #-1
     b.eq .Linit_ret  // mem_sbrk failed
     str xzr, [x0], #WORD_SIZE_BYTES  // Alignment padding
     // Initialize the segregated free lists
-    mov x1, #NUM_SEG_LISTS - 1
+    mov x4, #2 * DWORD_SIZE_BYTES  // The size of all the header and footers
+    SET_SIZE x1, x4
+    SET_ALLOCATED x1, 1
+    mov x2, #NUM_SEG_LISTS - 1
+    ldr x3, =seg_listp
 .Linit_seglists_loop:
-   subs x1, x1, #1
-   b.le .Linit_seglists_loop
+    // Initialize the header
+    str x1, [x0]
+    SET_FPREV x0, x0
+    SET_FNEXT x0, x0
+
+    // Initialize the footer
+    str x1, [x0, #3 * WORD_SIZE_BYTES]
+
+    add x4, x0, #WORD_SIZE_BYTES  // Pointer to payload
+    str x4, [x3, x2]  // Update the segmented list array
+
+    add x0, x0, #2 * DWORD_SIZE_BYTES  // Next block
+    subs x2, x2, #1
+    b.le .Linit_seglists_loop
+    // End of loop
+
+    // Store the epilogue header
+    mov x4, #0
+    SET_SIZE x1, x4
+    SET_ALLOCATED x1, 1
+    str x1, [x0]
+
+    // Extend the heap with a free block of PAGE_SIZE_BYTES
+    // TODO: Implement this
 .Linit_ret:
     ldr lr, [sp], #16
     ret
