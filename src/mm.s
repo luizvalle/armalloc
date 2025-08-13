@@ -326,6 +326,127 @@ seg_listp: .skip NUM_SEG_LISTS * PTR_SIZE_BYTES
 .endm
 
 
+// Calculates the header address from the payload pointer.
+//
+// Syntax:
+//   HEADER_P_FROM_PAYLOAD_P payload_p_reg, output_reg
+//
+// Parameters:
+//   payload_p_reg [Register]
+//                 - Register containing the payload address
+//                 - Points to the user data portion of an allocated block
+//                 - Register value is preserved (non-destructive operation)
+//
+//   output_reg    [Register]
+//                 - Register to store the calculated header address
+//                 - Will contain pointer to the header structure
+//                 - Previous value is overwritten
+//
+// Behavior:
+//   - Calculates header address by subtracting WORD_SIZE_BYTES from payload
+//   - Equivalent to: header = (header_t*)((char*)payload - WORD_SIZE)
+//   - Header immediately precedes payload in memory layout
+//
+// Memory Layout:
+//   header_addr:                     64-bit header bitfield (calculated address)
+//   header_addr + WORD_SIZE_BYTES:   payload start (input address)
+//
+// Example Usage:
+//   mov x0, #payload_addr         // Address of user data
+//   HEADER_P_FROM_PAYLOAD_P x0, x1 // x1 = header address
+//   // Now x1 points to header, x0 still has payload address
+//
+//   // Chain with other operations:
+//   HEADER_P_FROM_PAYLOAD_P x2, x3 // Get header from different payload
+//   ldr x4, [x3]                  // Load header value
+//
+// Registers Modified:
+//   output_reg - contains calculated header address
+//   payload_p_reg - preserved unchanged
+.macro HEADER_P_FROM_PAYLOAD_P payload_p_reg, output_reg
+    sub \output_reg, \payload_p_reg, #WORD_SIZE_BYTES
+.endm
+
+
+// Calculates the footer address from the payload pointer.
+//
+// Syntax:
+//   FOOTER_P_FROM_PAYLOAD_P payload_p_reg, output_reg
+//
+// Parameters:
+//   payload_p_reg [Register]
+//                 - Register containing the payload address
+//                 - Points to the user data portion of an allocated block
+//                 - Register value is preserved (non-destructive operation)
+//
+//   output_reg    [Register]
+//                 - Register to store the calculated footer address
+//                 - Will contain pointer to the footer structure
+//                 - Used as temporary register during calculation
+//
+// Behavior:
+//   - Calculates footer address using block size from header
+//   - Equivalent to:
+//      footer = (
+//                  (footer_t*)((char*)payload
+//                  + header(payload)->size - DWORD_SIZE))
+//   - Reads header to get block size, then computes footer location
+//   - Footer is located at the end of the allocated block
+//
+// Memory Layout:
+//   header_addr:                           64-bit header bitfield
+//   header_addr + WORD_SIZE_BYTES:         payload start (input address)
+//   ...
+//   payload + size - DWORD_SIZE_BYTES:     footer location (calculated address)
+//
+// Example Usage:
+//   mov x0, #payload_addr           // Address of user data
+//   FOOTER_P_FROM_PAYLOAD_P x0, x1  // x1 = footer address
+//   ldr x2, [x1]                   // Load footer value
+//
+//   // Verify header/footer consistency:
+//   HEADER_P_FROM_PAYLOAD_P x0, x3  // Get header address
+//   FOOTER_P_FROM_PAYLOAD_P x0, x4  // Get footer address
+//   ldr x5, [x3]                   // Compare header and footer values
+//   ldr x6, [x4]
+//
+// Registers Modified:
+//   output_reg - contains calculated footer address (intermediate values overwritten)
+//   payload_p_reg - preserved unchanged
+//   Depends on GET_SIZE macro for additional register usage
+.macro FOOTER_P_FROM_PAYLOAD_P payload_p_reg, output_reg
+   HEADER_P_FROM_PAYLOAD_P \payload_p_reg, \output_reg
+   ldr \output_reg, [\output_reg]
+   GET_SIZE \output_reg, \output_reg
+   sub \output_reg, \output_reg, #DWORD_SIZE_BYTES 
+   add \output_reg, \payload_p_reg, \output_reg
+.endm
+
+
+extend_heap:
+    stp lr, x19, [sp, #-16]!
+    tst x0, #1
+    b.eq .Lextend_heap_even_input
+    add x0, x0, #1  // Make the number even
+.Lextend_heap_even_input:
+    lsl x0, x0, #WORD_ALIGN  // Multiply by WORD_SIZE_BYTES
+    mov x19, x0  // Save the size we requested
+    bl mem_sbrk
+    cmp x0, #-1
+    b.eq .Lextend_heap_sbrk_failed
+    SET_SIZE x1, x19
+    SET_ALLOCATED x1, 0
+    HEADER_P_FROM_PAYLOAD_P x0, x2
+    str x1, [x2]
+    FOOTER_P_FROM_PAYLOAD_P x0, x2
+    str x1, [x2]
+    // TODO: Implement this
+.Lextend_heap_sbrk_failed:
+    mov x0, #0
+.Lextend_heap_ret:
+    ldp lr, x19, [sp], #16
+    ret
+
 // Initializes the memory manager.
 mm_init:
     str lr, [sp, #-16]!
@@ -369,8 +490,13 @@ mm_init:
     str x1, [x0]
 
     // Extend the heap with a free block of PAGE_SIZE_BYTES
-    // TODO: Implement this
+    mov x0, #PAGE_SIZE_BYTES / WORD_SIZE_BYTES
+    bl extend_heap
+    cbz x0, .Lmm_init_extend_head_err
     mov x0, #0
+    b .Linit_ret
+.Lmm_init_extend_head_err:
+    mov x0, #-1
 .Linit_ret:
     ldr lr, [sp], #16
     ret

@@ -3,6 +3,7 @@
 .equ INT_SIZE_BYTES,                    4
 .equ INT_ALIGN,                         2  // Since log_2(4) = 2
 .equ WORD_SIZE_BYTES,                   8
+.equ WORD_ALIGN,                        3  // Since log_2(8) = 3
 .equ DWORD_SIZE_BYTES,                  WORD_SIZE_BYTES * 2
 .equ PTR_SIZE_BYTES,                    WORD_SIZE_BYTES
 .equ PTR_ALIGN,                         3  // Since log_2(8) = 3
