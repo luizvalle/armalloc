@@ -326,6 +326,49 @@ seg_listp: .skip NUM_SEG_LISTS * PTR_SIZE_BYTES
 .endm
 
 
+// Calculates the payload address from a given header address.
+//
+// Syntax:
+//   GET_PAYLOAD_P_FROM_HEADER_P header_addr_reg, output_reg
+//
+// Parameters:
+//   header_addr_reg   [Register]
+//                     - Register containing the block header address
+//                     - Points to the beginning of the block's metadata
+//                     - Register value is preserved (non-destructive operation)
+//
+//   output_reg        [Register]
+//                     - Register to store the calculated payload address
+//                     - Will contain pointer to the block's user data area
+//                     - Used as destination for the calculation
+//
+// Behavior:
+//   - Calculates payload address by adding header size to header address
+//   - Assumes each block header is exactly WORD_SIZE_BYTES in length
+//   - The payload immediately follows the header in memory
+//   - Equivalent to:
+//      payload = (void*)((char*)header + WORD_SIZE_BYTES)
+//
+// Memory Layout:
+//   [header (WORD_SIZE_BYTES)][payload (user data)...]
+//   ^                         ^
+//   header_addr_reg           output_reg (result)
+//
+// Example Usage:
+//   mov x0, #block_header           // Address of block header
+//   GET_PAYLOAD_P_FROM_HEADER_P x0, x1  // x1 = payload address for this block
+//
+// Registers Modified:
+//   output_reg - contains calculated payload address
+//   header_addr_reg - preserved unchanged
+//
+// Note: This is the inverse operation of HEADER_P_FROM_PAYLOAD_P, which
+//       calculates header address from payload address.
+.macro GET_PAYLOAD_P_FROM_HEADER_P header_addr_reg, output_reg
+    add \output_reg, \header_addr_reg, #WORD_SIZE_BYTES
+.endm
+
+
 // Calculates the header address from the payload pointer.
 //
 // Syntax:
@@ -522,7 +565,113 @@ seg_listp: .skip NUM_SEG_LISTS * PTR_SIZE_BYTES
 .endm
 
 
+// Calculates the address of the next free block's payload in the free list.
+//
+// Syntax:
+//   NEXT_FREE_PAYLOAD_P cur_payload_p_reg, output_reg
+//
+// Parameters:
+//   cur_payload_p_reg [Register]
+//                     - Register containing the current free block's payload
+//                       address
+//                     - Points to the user data portion of the current free
+//                       block
+//                     - Must be a block that is currently in the free list
+//                     - Register value is preserved (non-destructive operation)
+//
+//   output_reg        [Register]
+//                     - Register to store the next free block's payload address
+//                     - Will contain pointer to the next free block's payload
+//                     - Used as temporary register during calculation
+//
+// Behavior:
+//   - Traverses the free list forward to find the next free block
+//   - Reads the 'next' pointer from the current block's header
+//   - Converts the next block's header address to its payload address
+//   - Does NOT traverse by physical memory layout, but by free list linkage
+//   - Equivalent to:
+//      next_header = header(current_payload)->fnext
+//      next_payload = payload_from_header(next_header)
+//
+// Example Usage:
+//   mov x0, #current_free_payload   // Address of current free block's data
+//   NEXT_FREE_PAYLOAD_P x0, x1      // x1 = next free block's payload address
+//
+// Registers Modified:
+//   output_reg - contains next free block's payload address (or null if end)
+//   cur_payload_p_reg - preserved unchanged
+//
+// Note: This traverses the logical free list, not physical memory order.
+//       Use NEXT_PAYLOAD_P for physical memory traversal.
+.macro NEXT_FREE_PAYLOAD_P cur_payload_p_reg, output_reg
+    HEADER_P_FROM_PAYLOAD_P \cur_payload_p_reg, \output_reg
+    GET_FNEXT \output_reg, \output_reg
+    GET_PAYLOAD_P_FROM_HEADER_P \output_reg, \output_reg
+.endm
+
+
+// Calculates the address of the previous free block's payload in the free list.
+//
+// Syntax:
+//   PREV_FREE_PAYLOAD_P cur_payload_p_reg, output_reg
+//
+// Parameters:
+//   cur_payload_p_reg [Register]
+//                     - Register containing the current free block's payload
+//                       address
+//                     - Points to the user data portion of the current free
+//                       block
+//                     - Must be a block that is currently in the free list
+//                     - Register value is preserved (non-destructive operation)
+//
+//   output_reg        [Register]
+//                     - Register to store the previous free block's payload
+//                       address
+//                     - Will contain pointer to the previous free block's
+//                       payload
+//                     - Used as temporary register during calculation
+//
+// Behavior:
+//   - Traverses the free list backward to find the previous free block
+//   - Reads the 'previous' pointer from the current block's header
+//   - Converts the previous block's header address to its payload address
+//   - Does NOT traverse by physical memory layout, but by free list linkage
+//   - Equivalent to:
+//      prev_header = header(current_payload)->fprev
+//      prev_payload = payload_from_header(prev_header)
+//
+// Example Usage:
+//   mov x0, #current_free_payload   // Address of current free block's data
+//   PREV_FREE_PAYLOAD_P x0, x1   // x1 = previous free block's payload address
+//
+// Registers Modified:
+//   output_reg - contains previous free block's payload address
+//   cur_payload_p_reg - preserved unchanged
+//
+// Note: This traverses the logical free list, not physical memory order.
+//       Use PREV_PAYLOAD_P for physical memory traversal.
+.macro PREV_FREE_PAYLOAD_P cur_payload_p_reg, output_reg
+    HEADER_P_FROM_PAYLOAD_P \cur_payload_p_reg, \output_reg
+    GET_FPREV \output_reg, \output_reg
+    GET_PAYLOAD_P_FROM_HEADER_P \output_reg, \output_reg
+.endm
+
+
 coalesce:
+    str lr, [sp, #-16]!
+
+    // Retrieve the addresses of the previous and next blocks
+    PREV_PAYLOAD_P x0, x1
+    NEXT_PAYLOAD_P x0, x2
+
+    // Retrieve the size of the current block
+    HEADER_P_FROM_PAYLOAD_P x0, x3
+    ldr x4, [x3]
+    GET_SIZE x4, x4
+
+    // TODO: Implement
+.Lcoalesce_ret:
+    ldr lr, [sp], #16
     ret
 
 
