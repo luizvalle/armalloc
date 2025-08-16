@@ -411,7 +411,8 @@ seg_listp: .skip NUM_SEG_LISTS * PTR_SIZE_BYTES
 //   ldr x6, [x4]
 //
 // Registers Modified:
-//   output_reg - contains calculated footer address (intermediate values overwritten)
+//   output_reg - contains calculated footer address (intermediate values
+//                overwritten)
 //   payload_p_reg - preserved unchanged
 //   Depends on GET_SIZE macro for additional register usage
 .macro FOOTER_P_FROM_PAYLOAD_P payload_p_reg, output_reg
@@ -423,48 +424,319 @@ seg_listp: .skip NUM_SEG_LISTS * PTR_SIZE_BYTES
 .endm
 
 
+// Calculates the address of the next payload from the current payload pointer.
+//
+// Syntax:
+//   NEXT_PAYLOAD_P cur_payload_p_reg, output_reg
+//
+// Parameters:
+//   cur_payload_p_reg [Register]
+//                     - Register containing the current payload address
+//                     - Points to the user data portion of the current
+//                       allocated block
+//                     - Register value is preserved (non-destructive operation)
+//
+//   output_reg        [Register]
+//                     - Register to store the calculated next payload address
+//                     - Will contain pointer to the next block's payload
+//                     - Used as temporary register during calculation
+//
+// Behavior:
+//   - Calculates next payload address by adding current block size to current
+//     payload
+//   - Equivalent to:
+//      next_payload = (void*)((char*)payload + header(payload)->size)
+//   - Reads the current block's header to get its size, then advances by that
+//     amount
+//
+// Example Usage:
+//   mov x0, #current_payload        // Address of current block's data
+//   NEXT_PAYLOAD_P x0, x1          // x1 = next block's payload address
+//
+// Registers Modified:
+//   output_reg - contains calculated next payload address
+//   cur_payload_p_reg - preserved unchanged
+.macro NEXT_PAYLOAD_P cur_payload_p_reg, output_reg
+    HEADER_P_FROM_PAYLOAD_P \cur_payload_p_reg, \output_reg
+    ldr \output_reg, [\output_reg]
+    GET_SIZE \output_reg, \output_reg
+    add \output_reg, \cur_payload_p_reg, \output_reg
+.endm
+
+
+// Calculates the address of the previous payload from the current payload pointer.
+//
+// Syntax:
+//   PREV_PAYLOAD_P cur_payload_p_reg, output_reg
+//
+// Parameters:
+//   cur_payload_p_reg [Register]
+//                     - Register containing the current payload address
+//                     - Points to the user data portion of the current
+//                       allocated block
+//                     - Register value is preserved (non-destructive operation)
+//
+//   output_reg        [Register]
+//                     - Register to store the calculated previous payload
+//                       address
+//                     - Will contain pointer to the previous block's payload
+//                     - Used as temporary register during calculation
+//
+// Behavior:
+//   - Calculates previous payload address by reading the previous block's size
+//     from its footer and subtracting that amount from current payload
+//   - Assumes blocks store size information in both header and footer for
+//     bidirectional traversal
+//   - Footer is located immediately before the current block's header
+//   - Equivalent to:
+//      prev_size = footer(current_payload - DWORD_SIZE_BYTES)->size
+//      prev_payload = (void*)((char*)current_payload - prev_size)
+//
+// Memory Layout Assumption:
+//   [prev_header][prev_payload...][prev_footer][cur_header][cur_payload...]
+//                                      ^
+//                                 footer contains
+//                                 previous block size
+//
+// Example Usage:
+//   mov x0, #current_payload        // Address of current block's data
+//   PREV_PAYLOAD_P x0, x1          // x1 = previous block's payload address
+//
+// Registers Modified:
+//   output_reg - contains calculated previous payload address
+//   cur_payload_p_reg - preserved unchanged
+.macro PREV_PAYLOAD_P cur_payload_p_reg, output_reg
+    // Caculate the address of the previous block's footer
+    // (located DWORD_SIZE_BYTES before current payload)
+    sub \output_reg, \cur_payload_p_reg, #DWORD_SIZE_BYTES
+
+    // Load the previous block's size from its footer
+    ldr \output_reg, [\output_reg]
+
+    // Extract the size field from the footer data
+    GET_SIZE \output_reg, \output_reg
+
+    // Calculate previous payload address by subtracting previous block size
+    // from current payload address
+    sub \output_reg, \cur_payload_p_reg, \output_reg
+.endm
+
+
+coalesce:
+    ret
+
+
+// Extends the heap with a free block and returns its payload pointer.
+//
+// Syntax:
+//   bl extend_heap
+//
+// Parameters:
+//   x0 [Register]
+//      - Number of words to extend the heap by
+//      - Will be rounded up to the nearest even number
+//      - Each word is WORD_SIZE bytes (8 bytes)
+//
+// Return Value:
+//   x0 [Register]
+//      - On success: Pointer to the payload of the new coalesced free block
+//      - On failure: NULL (0) if mem_sbrk fails
+//
+// Behavior:
+//   - Rounds up word count to nearest even number for alignment
+//   - Calls mem_sbrk to extend heap by (words * WORD_SIZE) bytes
+//   - Sets up new free block with header and footer
+//   - Creates new epilogue header at end of extended region
+//   - Calls coalesce to merge with adjacent free blocks if possible
+//   - Returns pointer to the resulting free block's payload
+//
+// Algorithm:
+//   1. Round words up to even number: words = (words + 1) & ~1
+//   2. Calculate size in bytes: size = words * WORD_SIZE
+//   3. Extend heap with mem_sbrk(size)
+//   4. Initialize new block as free with size
+//   5. Create new epilogue header (size=0, allocated=1)
+//   6. Coalesce with adjacent blocks
+//   7. Return coalesced block payload
+//
+// Memory Layout After Extension:
+//   [existing heap...]
+//   [new block header]     <- mem_sbrk return pointer - WORD_SIZE
+//   [new block payload]    <- mem_sbrk return pointer (function return value)
+//   [new block data...]
+//   [new block footer]
+//   [new epilogue header]  <- size=0, allocated=1
+//
+// Example Usage:
+//   mov x0, #64                    // Extend by 64 words (512 bytes)
+//   bl extend_heap                 // x0 = new free block payload or NULL
+//   cbz x0, heap_extension_failed  // Branch if extension failed
+//   // x0 now points to usable free block payload
+//
+// Registers Modified:
+//   x0  - Return value (payload pointer or NULL)
+//   x1  - Used for header/footer values (overwritten)
+//   x2  - Used for address calculations (overwritten)
+//   x19 - Saved/restored (used to preserve size value)
+//   lr  - Saved/restored (for function calls)
+//
+// Function Calls:
+//   - mem_sbrk(size) - Extends heap memory
+//   - coalesce(payload) - Merges adjacent free blocks
+//
+// Error Conditions:
+//   - Returns NULL if mem_sbrk fails (heap cannot be extended)
 extend_heap:
     stp lr, x19, [sp, #-16]!
-    tst x0, #1
-    b.eq .Lextend_heap_even_input
-    add x0, x0, #1  // Make the number even
-.Lextend_heap_even_input:
-    lsl x0, x0, #WORD_ALIGN  // Multiply by WORD_SIZE_BYTES
-    mov x19, x0  // Save the size we requested
+
+    // Make number of words even
+    // words = words % 2 ? (words + 1) * WORD_SIZE : words * WORD_SIZE;
+    // Works by adding 1 to the number and then clearing the last bit.
+    // Leverages the fact that even numbers have a 0 in the last bit.
+    add x0, x0, #1
+    bic x0, x0, #1
+
+    lsl x19, x0, #WORD_ALIGN  // size = words * WORD_SIZE (8)
+    mov x0, x19
     bl mem_sbrk
     cmp x0, #-1
     b.eq .Lextend_heap_sbrk_failed
+
+    // Set up the free block's header and footer
     SET_SIZE x1, x19
     SET_ALLOCATED x1, 0
+
     HEADER_P_FROM_PAYLOAD_P x0, x2
-    str x1, [x2]
+    str x1, [x2]  // Store header
     FOOTER_P_FROM_PAYLOAD_P x0, x2
+    str x1, [x2]  // Store footer
+
+    // Create new epilogue
+    NEXT_PAYLOAD_P x0, x2
+    HEADER_P_FROM_PAYLOAD_P x2, x2
+    mov x1, #0  // This will zero-out the size as well
+    SET_ALLOCATED x1, 1
     str x1, [x2]
-    // TODO: Implement this
+
+    bl coalesce
+    b .Lextend_heap_ret
 .Lextend_heap_sbrk_failed:
-    mov x0, #0
+    mov x0, #0  // Return NULL
 .Lextend_heap_ret:
     ldp lr, x19, [sp], #16
     ret
 
-// Initializes the memory manager.
+
+// Initializes the memory manager with segregated free lists.
+//
+// Syntax:
+//   bl mm_init
+//
+// Parameters:
+//   None
+//
+// Return Value:
+//   x0 [Register]
+//      - 0 on success (memory manager initialized successfully)
+//      - Non-zero on failure (mem_init failure code or -1 for other errors)
+//
+// Behavior:
+//   - Initializes the underlying memory system via mem_init
+//   - Allocates space for NUM_SEG_LISTS prologue blocks plus padding and epilogue
+//   - Sets up each segregated free list as a circular doubly-linked list
+//   - Creates prologue blocks (allocated sentinel nodes) for each size class
+//   - Places an epilogue block (size=0, allocated=1) at the end
+//   - Extends heap with an initial free block of PAGE_SIZE bytes
+//   - All prologue blocks are self-referencing (fprev=fnext=self) initially
+//
+// Algorithm:
+//   1. Call mem_init() to initialize memory subsystem
+//   2. Allocate (2 + NUM_SEG_LISTS * 4) words via mem_sbrk:
+//      - 1 word for alignment padding
+//      - NUM_SEG_LISTS * 4 words for prologue blocks (4 words each)
+//      - 1 word for epilogue header
+//   3. Store alignment padding (0) and advance pointer
+//   4. For each segregated list (0 to NUM_SEG_LISTS-1):
+//      - Create prologue header (size=32 bytes, allocated=1)
+//      - Set up circular links (fprev=fnext=self)
+//      - Create prologue footer matching header
+//      - Store payload pointer in seg_listp[i] array
+//      - Advance to next block position
+//   5. Create epilogue header (size=0, allocated=1)
+//   6. Extend heap with PAGE_SIZE free block
+//   7. Return 0 on success, -1 on heap extension failure
+//
+// Memory Layout After Initialization:
+//   [alignment padding: 8 bytes]
+//   [seg_list[0] prologue: header(32,1) + links + footer(32,1)]
+//   [seg_list[1] prologue: header(32,1) + links + footer(32,1)]
+//   ...
+//   [seg_list[7] prologue: header(32,1) + links + footer(32,1)]
+//   [epilogue: header(0,1)]
+//   [initial free block: header + payload + footer]
+//   [new epilogue: header(0,1)]
+//
+// Segregated List Size Classes:
+//   seg_listp[0]: 32-63 bytes      seg_listp[4]: 512-1023 bytes
+//   seg_listp[1]: 64-127 bytes     seg_listp[5]: 1024-2047 bytes
+//   seg_listp[2]: 128-255 bytes    seg_listp[6]: 2048-4095 bytes
+//   seg_listp[3]: 256-511 bytes    seg_listp[7]: 4096+ bytes
+//
+// Example Usage:
+//   bl mm_init                     // Initialize memory manager
+//   cbnz x0, init_failed          // Branch if initialization failed
+//   // Memory manager ready for malloc/free operations
+//
+// Registers Modified:
+//   x0  - Return value (0 on success, error code on failure)
+//   x1  - Used for header/footer values (overwritten)
+//   x2  - Used for size calculations and seg_listp address (overwritten)
+//   x3  - Used as loop iteration counter (overwritten)
+//   x4  - Used for payload address calculations (overwritten)
+//   lr  - Saved/restored (for function calls)
+//
+// Function Calls:
+//   - mem_init() - Initialize underlying memory system
+//   - mem_sbrk(size) - Allocate initial heap space
+//   - extend_heap(words) - Add initial free block
+//
+// Error Conditions:
+//   - Returns mem_init error code if memory initialization fails
+//   - Returns -1 if mem_sbrk fails (insufficient system memory)
+//   - Returns -1 if extend_heap fails (cannot create initial free block)
+//
+// Global State Modified:
+//   - seg_listp[0..7] array populated with prologue payload pointers
+//   - Heap initialized with prologue blocks, epilogue, and initial free space
+//   - Memory manager ready for allocation/deallocation operations
+//
+// Dependencies:
+//   - SET_SIZE, SET_ALLOCATED macros for header manipulation
+//   - SET_FPREV, SET_FNEXT macros for link manipulation
+//   - Constants: NUM_SEG_LISTS, WORD_SIZE_BYTES, DWORD_SIZE_BYTES, PAGE_SIZE_BYTES, PTR_ALIGN
+//   - mem_init, mem_sbrk, extend_heap functions
+//   - seg_listp global array
 mm_init:
     str lr, [sp, #-16]!
-    // mem_init(x0)
+
+    // Call mem_init with x0
     bl mem_init
-    cbnz x0, .Linit_ret
-    // Calculate the number of words needed for the empty list
+    cbnz x0, .Linit_ret  // Call failed, return the same result as mem_init
+
+    // Allocated space for the empty segmented free list
     mov x0, #2 + NUM_SEG_LISTS * 4
     bl mem_sbrk  // mem_sbrk(2 + NUM_SEG_LISTS * 4)
     cmp x0, #-1
     b.eq .Linit_ret  // mem_sbrk failed
+
     str xzr, [x0], #WORD_SIZE_BYTES  // Alignment padding
+
     // Initialize the segregated free lists
     mov x2, #2 * DWORD_SIZE_BYTES  // The size of all the header and footers
     SET_SIZE x1, x2
     SET_ALLOCATED x1, 1
     ldr x2, =seg_listp
-    mov x3, #0
+    mov x3, #0  // Iteration index
 .Linit_seglists_loop:
     // Initialize the header
     str x1, [x0]
@@ -475,7 +747,7 @@ mm_init:
     str x1, [x0, #3 * WORD_SIZE_BYTES]
 
     add x4, x0, #WORD_SIZE_BYTES  // Pointer to payload
-    str x4, [x2, x3, LSL #3]  // Update the segmented list array
+    str x4, [x2, x3, LSL #PTR_ALIGN]  // Update the segmented list array
 
     add x0, x0, #2 * DWORD_SIZE_BYTES  // Next block
     add x3, x3, #1
@@ -493,6 +765,7 @@ mm_init:
     mov x0, #PAGE_SIZE_BYTES / WORD_SIZE_BYTES
     bl extend_heap
     cbz x0, .Lmm_init_extend_head_err
+
     mov x0, #0
     b .Linit_ret
 .Lmm_init_extend_head_err:
@@ -501,13 +774,16 @@ mm_init:
     ldr lr, [sp], #16
     ret
 
+
 // De-initializes the memory manager.
 mm_deinit:
     ret
 
+
 // Allocates a block with at least size bytes of payload.
 mm_malloc:
     ret
+
 
 // Frees a block
 mm_free:
