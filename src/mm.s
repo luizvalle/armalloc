@@ -30,7 +30,8 @@ seg_listp: .skip NUM_SEG_LISTS * PTR_SIZE_BYTES
 //
 // Behavior:
 //   - Initializes the underlying memory system via mem_init
-//   - Allocates space for NUM_SEG_LISTS prologue blocks plus padding and epilogue
+//   - Allocates space for NUM_SEG_LISTS prologue blocks plus padding and
+//     epilogue
 //   - Sets up each segregated free list as a circular doubly-linked list
 //   - Creates prologue blocks (allocated sentinel nodes) for each size class
 //   - Places an epilogue block (size=0, allocated=1) at the end
@@ -97,13 +98,6 @@ seg_listp: .skip NUM_SEG_LISTS * PTR_SIZE_BYTES
 //   - seg_listp[0..7] array populated with prologue payload pointers
 //   - Heap initialized with prologue blocks, epilogue, and initial free space
 //   - Memory manager ready for allocation/deallocation operations
-//
-// Dependencies:
-//   - SET_SIZE, SET_ALLOCATED macros for header manipulation
-//   - SET_FPREV, SET_FNEXT macros for link manipulation
-//   - Constants: NUM_SEG_LISTS, WORD_SIZE_BYTES, DWORD_SIZE_BYTES, PAGE_SIZE_BYTES, PTR_ALIGN
-//   - mem_init, mem_sbrk, extend_heap functions
-//   - seg_listp global array
 mm_init:
     str lr, [sp, #-16]!
 
@@ -234,7 +228,7 @@ mm_free:
 //
 // Function Calls:
 //   - mem_sbrk(size) - Extends heap memory
-//   - coalesce(payload) - Merges adjacent free blocks
+//   - _coalesce(payload) - Merges adjacent free blocks
 //
 // Error Conditions:
 //   - Returns NULL if mem_sbrk fails (heap cannot be extended)
@@ -280,7 +274,10 @@ _extend_heap:
 
 
 _coalesce:
-    str lr, [sp, #-16]!
+    stp lr, x19, [sp, #-16]!
+
+    // Save the payload address
+    mov x19, x0
 
     // Retrieve the addresses of the previous and next blocks
     PREV_PAYLOAD_P x0, x1
@@ -316,16 +313,87 @@ _coalesce:
     .quad .Lcoalesce_case_both_allocated
 
 .Lcoalesce_case_neither_allocated:
+    // TODO: Implement
     b .Lcoalesce_add_to_list
 .Lcoalesce_case_only_prev_allocated:
+    // TODO: Implement
     b .Lcoalesce_add_to_list
 .Lcoalesce_case_only_next_allocated:
+    // TODO: Implement
     b .Lcoalesce_add_to_list
 .Lcoalesce_case_both_allocated:
+    // Nothing to coalesce
     b .Lcoalesce_add_to_list
 
 .Lcoalesce_add_to_list:
-    // TODO: Implement
+    mov x0, x19
+    bl _add_to_free_list
+    mov x0, x19  // Return the payload address
+
 .Lcoalesce_ret:
+    ldp lr, x19, [sp], #16
+    ret
+
+
+_add_to_free_list:
+    str lr, [sp, #-16]!
+
+    // TODO: Implement
+
     ldr lr, [sp], #16
     ret
+
+
+// Returns the index into the segregated free list corresponding to a given block size.
+//
+// Syntax:
+//   bl _get_seglist_index
+//
+// Parameters:
+//   x0 [Register]
+//      - Size of the memory block in bytes
+//
+// Return Value:
+//   x0 [Register]
+//      - Index of the segregated free list for the given block size
+//
+// Behavior:
+//   - Determines which segregated free list a block belongs to based on its size
+//   - First divides size by 2^6 (64) since the first list handles blocks 32–63 bytes
+//   - Uses log2 to determine which power-of-two bucket the adjusted size falls into
+//   - Clamps the result at NUM_SEG_LISTS - 1 to prevent overflow
+//   - Returns 0 if size is smaller than 64 bytes
+//
+// Algorithm:
+//   1. Divide size by 64: size >>= 6
+//   2. If resulting size is 0, return 0
+//   3. Count leading zeros in size (clz) to find highest set bit
+//   4. Compute floor(log2(size)) = 64 - clz(size)
+//   5. Clamp index to maximum of NUM_SEG_LISTS - 1
+//   6. Return computed index
+//
+// Registers Modified:
+//   x0 - Input size / return value (seglist index)
+//   x1 - Temporary for clz result
+//   w2 - Temporary for calculations
+_get_seglist_index:
+    // Divide the block size by 2^6 = 64 as the first list contains blocks
+    // of size 32 <= x < 64
+    lsr x0, x0, #6
+    cbz x0, .Lget_seglist_index_zero
+
+    // Calculate floor(log2(x1))
+    clz x1, x0  // Count the number of leading zeros
+    mov w2, #64
+    sub w1, w2, x1  // floor(log2(x1))
+
+    // Clamp at most NUM_SEG_LISTS - 1
+    mov w2, #(NUM_SEG_LISTS - 1)
+    cmp w1, w2
+    csel x0, w1, w2, lt
+    ret
+
+.Lget_seglist_index_zero:
+    mov x0, #0
+    ret
+
