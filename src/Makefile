@@ -15,7 +15,7 @@
 
 include ../config.mk
 
-SRC_S = mm.s mem.s mm_errno.s
+SRC_S = mm.s mm_coalesce.s mm_extend_heap.s mem.s mm_errno.s
 OBJ = $(SRC_S:.s=.o)
 OBJ := $(addprefix $(BUILDDIR)/, $(notdir $(OBJ)))
 LIB = $(BUILDDIR)/libarmalloc64.a

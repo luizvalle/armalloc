@@ -1,3 +1,5 @@
+.include "constants.inc"
+
 // uint64_t      size : 60;    // Bits 0-59
 // uint64_t    unused :  3;    // Bits 60-62
 // uint64_t allocated :  1;    // Bit 63
