@@ -335,12 +335,80 @@ _coalesce:
     ret
 
 
+// Inserts a memory block into the appropriate segregated free list.
+//
+// Syntax:
+//   bl _add_to_free_list
+//
+// Parameters:
+//   x0 [Register]
+//      - Pointer to the payload of the memory block to insert
+//
+// Return Value:
+//   None
+//
+// Behavior:
+//   - Determines the size of the block from its header
+//   - Finds the corresponding segregated free list based on the block size
+//   - Inserts the block at the beginning of the list (after the sentinel node)
+//   - Updates fnext and fprev pointers of the block, the sentinel, and the
+//     original first free block
+//   - Ensures the doubly-linked free list remains consistent
+//
+// Algorithm:
+//   1. Save lr and payload pointer (x19) on stack
+//   2. Load header from payload, then read block size
+//   3. Call _get_seglist_index to get the free list index
+//   4. Load the sentinel pointer of the appropriate segregated free list
+//   5. Load the original first free block in the list
+//   6. Set new block's fnext to the original first free block
+//   7. Set new block's fprev to the sentinel
+//   8. Set original first free block's fprev to the new block
+//   9. Set sentinel's fnext to the new block
+//   10. Restore registers and return
+//
+// Registers Modified:
+//   x0 - Temporary, used for block size and free list index
+//   x1 - Temporary, used to load list pointers
+//   x2 - Header of sentinel node
+//   x3 - Header of original first free block
+//   x4 - Header of the block being inserted
+//   x19 - Saved payload pointer
+//   lr  - Link register saved/restored
 _add_to_free_list:
-    str lr, [sp, #-16]!
+    stp lr, x19, [sp, #-16]!
 
-    // TODO: Implement
+    mov x19, x0
 
-    ldr lr, [sp], #16
+    // Get the size of the block
+    HEADER_P_FROM_PAYLOAD_P x19, x1
+    ldr x0, [x1]
+    GET_SIZE x0, x0
+
+    // Get the header of the free list to insert into
+    bl _get_seglist_index
+    ldr x1, =seg_listp
+    ldr x1, [x1, x0, LSL #PTR_ALIGN]
+
+    // Get the header of the list's sentinel node
+    HEADER_P_FROM_PAYLOAD_P x1, x2
+
+    // Get the header of the original first free payload in the list
+    NEXT_FREE_PAYLOAD_P x1, x3
+    HEADER_P_FROM_PAYLOAD_P x3, x3
+
+    // Set the fnext and fprev pointers of the block
+    HEADER_P_FROM_PAYLOAD_P x19, x4
+    SET_FNEXT x4, x3
+    SET_FPREV x4, x2
+
+    // Set the fprev of the original first free payload in the list
+    SET_FPREV x3, x4
+
+    // Set the fnext of the header to point to the new payload
+    SET_FNEXT x2, x4
+
+    ldp lr, x19, [sp], #16
     ret
 
 
@@ -358,9 +426,12 @@ _add_to_free_list:
 //      - Index of the segregated free list for the given block size
 //
 // Behavior:
-//   - Determines which segregated free list a block belongs to based on its size
-//   - First divides size by 2^6 (64) since the first list handles blocks 32–63 bytes
-//   - Uses log2 to determine which power-of-two bucket the adjusted size falls into
+//   - Determines which segregated free list a block belongs to based on its
+//     size
+//   - First divides size by 2^6 (64) since the first list handles blocks 32–63
+//     bytes
+//   - Uses log2 to determine which power-of-two bucket the adjusted size falls
+//     into
 //   - Clamps the result at NUM_SEG_LISTS - 1 to prevent overflow
 //   - Returns 0 if size is smaller than 64 bytes
 //
