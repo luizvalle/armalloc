@@ -385,12 +385,12 @@ _get_seglist_index:
     // Calculate floor(log2(x1))
     clz x1, x0  // Count the number of leading zeros
     mov w2, #64
-    sub w1, w2, x1  // floor(log2(x1))
+    sub w1, w2, w1  // floor(log2(x1))
 
     // Clamp at most NUM_SEG_LISTS - 1
     mov w2, #(NUM_SEG_LISTS - 1)
     cmp w1, w2
-    csel x0, w1, w2, lt
+    csel w0, w1, w2, lt
     ret
 
 .Lget_seglist_index_zero:
