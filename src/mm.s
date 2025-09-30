@@ -276,34 +276,48 @@ _extend_heap:
 _coalesce:
     stp lr, x19, [sp, #-16]!
 
-    // Save the payload address
-    mov x19, x0
-
     // Retrieve the addresses of the previous and next blocks
+    // x1 = address of previous block's payload
+    // x2 = address of next block's payload
     PREV_PAYLOAD_P x0, x1
     NEXT_PAYLOAD_P x0, x2
 
-    // Retrieve the size of the current block
+    // Retrieve the some information for the current block that will be used
+    // x0 = address of payload
+    // x3 = address of header
+    // x4 = contents of header
+    // x5 = size of the block
     HEADER_P_FROM_PAYLOAD_P x0, x3
     ldr x4, [x3]
-    GET_SIZE x4, x4
+    GET_SIZE x4, x5
 
-    // Retrieve the allocated status of the previous block
-    HEADER_P_FROM_PAYLOAD_P x1, x5
-    GET_ALLOCATED x5, x5
+    // Retrieve some information for the previous block
+    // x6 = address of header
+    // x7 = contents of header
+    HEADER_P_FROM_PAYLOAD_P x1, x6
+    ldr x7, [x6]
 
-    // Retrieve the allocated status of the next block
-    HEADER_P_FROM_PAYLOAD_P x2, x6
-    GET_ALLOCATED x6, x6
+    // Retrieve some information for the next block
+    // x8 = address of header
+    // x9 = contents of header
+    HEADER_P_FROM_PAYLOAD_P x2, x8
+    ldr x9, [x8]
 
     // Calculate the jump table index
-    orr w7, w5, w6, LSL #1  // w5 = prev | (next << 1)
+    // index = (next.allocated << 1) | prev.allocated
+    // x10 = prev.allocated
+    // x11 = next.allocated
+    // x12 = jump table index
+    GET_ALLOCATED x7, x10
+    GET_ALLOCATED x9, x11
+    orr w12, w10, w11, LSL #1
 
     // Jump table dispatch
-    adrp x8, .coalesce_jump_table  // Get the page address
-    add x8, x8, :lo12:.coalesce_jump_table  // Add the page offset
-    ldr x8, [x8, x7, LSL #3]  // Each element in the jump table is 2^3 = 8 bytes
-    br x8
+    // x13 = jump table branch address
+    adrp x13, .coalesce_jump_table  // Get the page address
+    add x13, x13, :lo12:.coalesce_jump_table  // Add the page offset
+    ldr x13, [x13, x12, LSL #3]  // Each element is 2^3 = 8 bytes
+    br x13
 
 .align 3
 .coalesce_jump_table:
@@ -313,7 +327,21 @@ _coalesce:
     .quad .Lcoalesce_case_both_allocated
 
 .Lcoalesce_case_neither_allocated:
+    // Should coalesce the previous, current, and next blocks
+
+    // x5 = current size
+    // x10 = previous size
+    // x11 = next size
+    GET_SIZE x7, x10
+    GET_SIZE x9, x11
+
+    // x5 = combined size
+    add x5, x5, x10
+    add x5, x5, x11
+
+    // Set the prev size in header and next size in footer
     // TODO: Implement
+
     b .Lcoalesce_add_to_list
 .Lcoalesce_case_only_prev_allocated:
     // TODO: Implement
@@ -325,8 +353,10 @@ _coalesce:
     // Nothing to coalesce
     b .Lcoalesce_add_to_list
 
+// After the branches above, x0 should contain the pointer to the payload
+// of the coalesced block to add to the free list.
 .Lcoalesce_add_to_list:
-    mov x0, x19
+    mv x19, x0  // Save the payload address
     bl _add_to_free_list
     mov x0, x19  // Return the payload address
 
@@ -410,6 +440,16 @@ _add_to_free_list:
 
     ldp lr, x19, [sp], #16
     ret
+
+
+_remove_from_free_list:
+    // Retrieve the addresses of the previous and next blocks
+    PREV_PAYLOAD_P x0, x1
+    NEXT_PAYLOAD_P x0, x2
+
+    HEADER_P_FROM_PAYLOAD_P x1, x3
+    HEADER_P_FROM_PAYLOAD_P x2, x4
+
 
 
 // Returns the index into the segregated free list corresponding to a given block size.
