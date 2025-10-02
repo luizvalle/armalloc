@@ -442,14 +442,72 @@ _add_to_free_list:
     ret
 
 
+// Removes a memory block from its segregated free list.
+//
+// Syntax:
+//   bl _remove_from_free_list
+//
+// Parameters:
+//   x0 [Register]
+//      - Pointer to the payload of the memory block to remove
+//
+// Return Value:
+//   None
+//
+// Behavior:
+//   - Retrieves the payload addresses of the block’s previous and next free
+//     blocks
+//   - Converts these payload addresses into their corresponding header
+//     addresses
+//   - Updates the fnext pointer of the previous block to point to the next
+//     block
+//   - Updates the fprev pointer of the next block to point to the previous
+//     block
+//
+// Algorithm:
+//   1. Save lr on the stack
+//   2. Use PREV_FREE_PAYLOAD_P to load the payload address of the previous free
+//      block into x1
+//   3. Use NEXT_FREE_PAYLOAD_P to load the payload address of the next free
+//      block into x2
+//   4. Convert x1 (previous payload) into its header address in x3
+//   5. Convert x2 (next payload) into its header address in x4
+//   6. Set the fnext pointer of the previous block (x1) to the header of the
+//      next block (x4)
+//   7. Set the fprev pointer of the next block (x2) to the header of the
+//      previous block (x3)
+//   8. Restore lr and return
+//
+// Registers Modified:
+//   x1 - Payload address of previous free block
+//   x2 - Payload address of next free block
+//   x3 - Header address of previous free block
+//   x4 - Header address of next free block
 _remove_from_free_list:
-    // Retrieve the addresses of the previous and next blocks
-    PREV_PAYLOAD_P x0, x1
-    NEXT_PAYLOAD_P x0, x2
+    str lr, [sp, #-16]
 
+    // Retrieve the payload addresses of the previous and next free blocks
+    // x1 = payload address of the previous free block
+    // x2 = payload address of the next free block
+    PREV_FREE_PAYLOAD_P x0, x1
+    NEXT_FREE_PAYLOAD_P x0, x2
+
+    // Retrieve the header addresses of the previous and next free blocks
+    // x3 = header address of the previous free block
+    // x4 = header address of the next free block
     HEADER_P_FROM_PAYLOAD_P x1, x3
     HEADER_P_FROM_PAYLOAD_P x2, x4
 
+    // Set the next pointer of the previous free payload to the address of the
+    // next free payload's header
+    SET_FNEXT x1, x4
+
+    // Set the prev pointer of the next free payload to the address of the
+    // previus free payload's header
+    SET_FPREV x2, x3
+
+    ldr lr, [sp], #16
+    ret
 
 
 // Returns the index into the segregated free list corresponding to a given block size.
