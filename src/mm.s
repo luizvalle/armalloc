@@ -351,17 +351,15 @@ _coalesce:
     SET_SIZE x15, x5
     str x15, [x14]
 
+    mov x19, x1  // Save the prev block's payload address
+
     // Remove prev block from free list
     mov x0, x1
     bl _remove_from_free_list
 
     // Remove the next block from free list
-    mov x19, x1  // Save the prev block's payload address
     mov x0, x2
     bl _remove_from_free_list
-
-    // Store in x0 the address of the payload of the combined block
-    mov x0, x19
 
     b .Lcoalesce_add_to_list
 
@@ -390,21 +388,42 @@ _coalesce:
     mov x0, x2
     bl _remove_from_free_list
 
-    // Store in x0 the address of the payload of the combined block
-    mov x0, x19
+    b .Lcoalesce_add_to_list
+
+.Lcoalesce_case_only_next_allocated:
+    // Should coalesce the previous and current blocks
+
+    // x11 = prev size
+    GET_SIZE x7, x10
+
+    // x5 = combined size
+    add x5, x5, x10
+
+    // Set the size in previous block's header
+    SET_SIZE x7, x5
+    str x7, [x6]
+
+    // Set the size in the new footer (current block's footer)
+    // x14 = address of the new footer
+    FOOTER_P_FROM_PAYLOAD_P x1, x14
+    str x7, [x14]
+
+    // Remove the prev block from the free list
+    mov x19, x1  // Save the previous block's payload address
+    mov x0, x1
+    bl _remove_from_free_list
 
     b .Lcoalesce_add_to_list
-.Lcoalesce_case_only_next_allocated:
-    // TODO: Implement
-    b .Lcoalesce_add_to_list
+
 .Lcoalesce_case_both_allocated:
     // Nothing to coalesce
+
     b .Lcoalesce_add_to_list
 
-// After the branches above, x0 should contain the pointer to the payload
+// After the branches above, x19 should contain the pointer to the payload
 // of the coalesced block to add to the free list.
 .Lcoalesce_add_to_list:
-    mv x19, x0  // Save the payload address
+    mov x0, x19  // Save the payload address
     bl _add_to_free_list
     mov x0, x19  // Return the payload address
 
@@ -532,7 +551,7 @@ _add_to_free_list:
 //   x3 - Header address of previous free block
 //   x4 - Header address of next free block
 _remove_from_free_list:
-    str lr, [sp, #-16]
+    str lr, [sp, #-16]!
 
     // Retrieve the payload addresses of the previous and next free blocks
     // x1 = payload address of the previous free block
@@ -548,11 +567,11 @@ _remove_from_free_list:
 
     // Set the next pointer of the previous free payload to the address of the
     // next free payload's header
-    SET_FNEXT x1, x4
+    SET_FNEXT x3, x4
 
     // Set the prev pointer of the next free payload to the address of the
     // previus free payload's header
-    SET_FPREV x2, x3
+    SET_FPREV x4, x3
 
     ldr lr, [sp], #16
     ret
