@@ -339,12 +339,46 @@ _coalesce:
     add x5, x5, x10
     add x5, x5, x11
 
-    // Set the prev size in header and next size in footer
-    // TODO: Implement
+    // Set the size in prev's header
+    SET_SIZE x7, x5
+    str x7, [x6]
+
+    // Set the size in next's footer
+    // x14 = &next.footer
+    // x15 = *x14
+    FOOTER_P_FROM_PAYLOAD_P x2, x14
+    ldr x15, [x14]
+    SET_SIZE x15, x5
+    str x15, [x14]
+
+    // Remove prev block from free list
+    mov x0, x1
+    bl _remove_from_free_list
+
+    // Remove the next block from free list
+    mov x0, x2
+    bl _remove_from_free_list
+
+    // Store in x0 the address of the payload of the combined block
+    mov x0, x1
 
     b .Lcoalesce_add_to_list
+
 .Lcoalesce_case_only_prev_allocated:
+    // Should coalesce the current and next blocks
+
+    // x11 = next size
+    GET_SIZE x9, x11
+
+    // x5 = combined size
+    add x5, x5, x11
+
+    // Set the size in the current header
+    SET_SIZE x4, x5
+    str x4, [x3]
+
     // TODO: Implement
+
     b .Lcoalesce_add_to_list
 .Lcoalesce_case_only_next_allocated:
     // TODO: Implement
