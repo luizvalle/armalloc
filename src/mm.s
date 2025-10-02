@@ -393,7 +393,7 @@ _coalesce:
 .Lcoalesce_case_only_next_allocated:
     // Should coalesce the previous and current blocks
 
-    // x11 = prev size
+    // x10 = prev size
     GET_SIZE x7, x10
 
     // x5 = combined size
@@ -417,6 +417,8 @@ _coalesce:
 
 .Lcoalesce_case_both_allocated:
     // Nothing to coalesce
+
+    mov x19, x0
 
     b .Lcoalesce_add_to_list
 
