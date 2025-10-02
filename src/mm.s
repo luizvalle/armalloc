@@ -356,11 +356,12 @@ _coalesce:
     bl _remove_from_free_list
 
     // Remove the next block from free list
+    mov x19, x1  // Save the prev block's payload address
     mov x0, x2
     bl _remove_from_free_list
 
     // Store in x0 the address of the payload of the combined block
-    mov x0, x1
+    mov x0, x19
 
     b .Lcoalesce_add_to_list
 
@@ -377,7 +378,20 @@ _coalesce:
     SET_SIZE x4, x5
     str x4, [x3]
 
-    // TODO: Implement
+    // Set the size in the new footer
+    // x16 = address of the new footer
+    FOOTER_P_FROM_PAYLOAD_P x0, x14
+    ldr x15, [x14]
+    SET_SIZE x15, x5
+    str x15, [x14]
+
+    // Remove the next block from the free list
+    mov x19, x0  // Save the current block's payload address
+    mov x0, x2
+    bl _remove_from_free_list
+
+    // Store in x0 the address of the payload of the combined block
+    mov x0, x19
 
     b .Lcoalesce_add_to_list
 .Lcoalesce_case_only_next_allocated:
