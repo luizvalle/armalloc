@@ -273,6 +273,103 @@ _extend_heap:
     ret
 
 
+// Coalesces a free block with adjacent free blocks to reduce fragmentation.
+//
+// Syntax:
+//   bl _coalesce
+//
+// Parameters:
+//   x0 [Register]
+//      - Pointer to the payload of the free block to coalesce
+//      - Block must be marked as free (allocated bit = 0)
+//
+// Return Value:
+//   x0 [Register]
+//      - Pointer to the payload of the resulting coalesced block
+//      - May be the same as input if no coalescing occurred
+//      - May point to previous block if coalesced with it
+//
+// Behavior:
+//   - Examines the allocation status of adjacent blocks (previous and next)
+//   - Merges the current block with any adjacent free blocks
+//   - Updates headers and footers of the resulting coalesced block
+//   - Removes merged blocks from the free list
+//   - Adds the final coalesced block to the free list
+//   - Uses a jump table for efficient dispatch based on neighbor allocation status
+//
+// Algorithm:
+//   1. Get pointers to previous and next block payloads
+//   2. Load current block's header and extract size
+//   3. Load previous and next block headers
+//   4. Calculate jump index: (next.allocated << 1) | prev.allocated
+//   5. Dispatch to appropriate case via jump table:
+//      - Case 0 (00b): Both neighbors free - merge all three blocks
+//      - Case 1 (01b): Only previous allocated - merge current with next
+//      - Case 2 (10b): Only next allocated - merge previous with current
+//      - Case 3 (11b): Both neighbors allocated - no coalescing
+//   6. Update header/footer with combined size for coalesced block
+//   7. Remove merged blocks from free list
+//   8. Add resulting block to free list
+//   9. Return payload pointer of coalesced block
+//
+// Coalescing Cases:
+//
+//   Case 0 - Neither Allocated (prev free, next free):
+//     [prev block] + [current block] + [next block] → [combined block]
+//     - Combined size = prev.size + current.size + next.size
+//     - Use prev block's header and next block's footer
+//     - Remove both prev and next from free list
+//     - Return prev block's payload pointer
+//
+//   Case 1 - Only Previous Allocated (prev allocated, next free):
+//     [prev block] | [current block] + [next block] → [combined block]
+//     - Combined size = current.size + next.size
+//     - Use current block's header and next block's footer
+//     - Remove next from free list
+//     - Return current block's payload pointer
+//
+//   Case 2 - Only Next Allocated (prev free, next allocated):
+//     [prev block] + [current block] | [next block] → [combined block]
+//     - Combined size = prev.size + current.size
+//     - Use prev block's header and current block's footer
+//     - Remove prev from free list
+//     - Return prev block's payload pointer
+//
+//   Case 3 - Both Allocated (prev allocated, next allocated):
+//     [prev block] | [current block] | [next block] → [current block]
+//     - No size change
+//     - No blocks removed from free list
+//     - Return current block's payload pointer
+//
+// Example Usage:
+//   // After freeing a block at x0
+//   bl _coalesce                   // Merge with neighbors if possible
+//   // x0 now points to coalesced block payload
+//
+// Registers Modified:
+//   x0  - Return value (coalesced block payload pointer)
+//   x1  - Previous block payload pointer (overwritten)
+//   x2  - Next block payload pointer (overwritten)
+//   x3  - Current block header address (overwritten)
+//   x4  - Current block header value (overwritten)
+//   x5  - Block size calculations (overwritten)
+//   x6  - Previous block header address (overwritten)
+//   x7  - Previous block header value (overwritten)
+//   x8  - Next block header address (overwritten)
+//   x9  - Next block header value (overwritten)
+//   x10 - Previous block allocated flag / size (overwritten)
+//   x11 - Next block allocated flag / size (overwritten)
+//   x12 - Jump table index (overwritten)
+//   x13 - Jump table address (overwritten)
+//   x14 - Footer address for updates (overwritten)
+//   x15 - Footer value for updates (overwritten)
+//   x19 - Saved/restored (preserves final payload pointer)
+//   lr  - Saved/restored (for function calls)
+//
+// Notes:
+//   - This function is typically called after freeing a block or extending the heap
+//   - All coalesced blocks maintain proper header/footer consistency
+//   - The function always returns a valid payload pointer (never NULL)
 _coalesce:
     stp lr, x19, [sp, #-16]!
 
