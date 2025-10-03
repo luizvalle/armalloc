@@ -286,8 +286,6 @@ _extend_heap:
 // Return Value:
 //   x0 [Register]
 //      - Pointer to the payload of the resulting coalesced block
-//      - May be the same as input if no coalescing occurred
-//      - May point to previous block if coalesced with it
 //
 // Behavior:
 //   - Examines the allocation status of adjacent blocks (previous and next)
@@ -295,22 +293,8 @@ _extend_heap:
 //   - Updates headers and footers of the resulting coalesced block
 //   - Removes merged blocks from the free list
 //   - Adds the final coalesced block to the free list
-//   - Uses a jump table for efficient dispatch based on neighbor allocation status
-//
-// Algorithm:
-//   1. Get pointers to previous and next block payloads
-//   2. Load current block's header and extract size
-//   3. Load previous and next block headers
-//   4. Calculate jump index: (next.allocated << 1) | prev.allocated
-//   5. Dispatch to appropriate case via jump table:
-//      - Case 0 (00b): Both neighbors free - merge all three blocks
-//      - Case 1 (01b): Only previous allocated - merge current with next
-//      - Case 2 (10b): Only next allocated - merge previous with current
-//      - Case 3 (11b): Both neighbors allocated - no coalescing
-//   6. Update header/footer with combined size for coalesced block
-//   7. Remove merged blocks from free list
-//   8. Add resulting block to free list
-//   9. Return payload pointer of coalesced block
+//   - Uses a jump table for efficient dispatch based on neighbor allocation
+//     status
 //
 // Coalescing Cases:
 //
@@ -367,7 +351,8 @@ _extend_heap:
 //   lr  - Saved/restored (for function calls)
 //
 // Notes:
-//   - This function is typically called after freeing a block or extending the heap
+//   - This function is typically called after freeing a block or extending the
+//     heap
 //   - All coalesced blocks maintain proper header/footer consistency
 //   - The function always returns a valid payload pointer (never NULL)
 _coalesce:
@@ -474,7 +459,8 @@ _coalesce:
     str x4, [x3]
 
     // Set the size in the new footer
-    // x16 = address of the new footer
+    // x14 = address of the new footer
+    // x15 = contents of the footer
     FOOTER_P_FROM_PAYLOAD_P x0, x14
     ldr x15, [x14]
     SET_SIZE x15, x5
