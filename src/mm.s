@@ -157,8 +157,48 @@ mm_init:
     ret
 
 
-// De-initializes the memory manager.
+// De-initializes the memory manager and releases system resources.
+//
+// Syntax:
+//   bl mm_deinit
+//
+// Parameters:
+//   None
+//
+// Return Value:
+//   x0 - Return status:
+//        0   = Success (arena unmapped or already uninitialized)
+//       -1   = Failure (invalid heap state or munmap failure; mm_errno is set)
+//
+// Behavior:
+//   - Calls mem_deinit to release underlying memory system resources
+//   - Should be called when the memory manager is no longer needed
+//   - After calling, mm_init must be called again before using malloc/free
+//
+// Registers Modified:
+//   x0  - Return value from mem_deinit
+//   lr  - Modified by function call (restored)
+//   Any registers modified by mem_deinit
+//
+// Function Calls:
+//   - mem_deinit() - Releases underlying memory system resources
+//
+// Notes:
+//   - This is a simple wrapper around mem_deinit
+//   - Does not validate that mm_init was previously called
+//   - Does not free individual allocated blocks (caller responsible for this)
+//   - Global state (seg_listp array) is not explicitly cleared
+//
+// Warning:
+//   - Calling mm_malloc or mm_free after mm_deinit results in undefined
+//     behavior
+//   - Must call mm_init again to reinitialize before further use
 mm_deinit:
+    str lr, [sp, #-16]!
+
+    bl mem_deinit
+
+    ldr lr, [sp], #16
     ret
 
 
