@@ -5,6 +5,8 @@
 
 #include <stddef.h>
 
+#define NUM_SEG_LISTS 8
+
 #ifdef __cplusplus
 extern "C" {
 #endif

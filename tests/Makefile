@@ -1,45 +1,62 @@
 # Makefile for building and running unit tests
 #
-# Usage:
-#   make BUILD=debug all        	- Build tests in debug mode
-#   make BUILD=release all      	- Build tests in release mode
-#   make BUILD=debug run_tests  	- Build and run tests in debug mode
-#   make BUILD=release run_tests	- Build and run tests in release mode
-#   make BUILD=debug clean      	- Clean debug build artifacts
-#   make BUILD=release clean    	- Clean release build artifacts
+# Usage examples:
+#   make BUILD=debug all         # Build all tests (debug mode)
+#   make BUILD=release test      # Build and run all tests (release mode)
+#   make BUILD=debug mem_test    # Build only mem_test
+#   make BUILD=debug mm_test     # Build only mm_test
+#   make BUILD=debug clean       # Clean debug build artifacts
 #
 # Produces:
-#   ../build/debug/mem_test or ../build/release/mem_test
+#   ../build/<mode>/mem_test
+#   ../build/<mode>/mm_test
 
 include ../config.mk
 
-SRC_C = mem_test.c
-OBJ = $(SRC_C:.c=.o)
-OBJ := $(addprefix $(BUILDDIR)/, $(notdir $(OBJ)))
-MEM_TEST = $(BUILDDIR)/mem_test
+# List of test source files
+TEST_SRCS := mem_test.c mm_test.c
+TEST_BINS := $(patsubst %.c,$(BUILDDIR)/%,$(TEST_SRCS))
+TEST_OBJS := $(patsubst %.c,$(BUILDDIR)/%.o,$(TEST_SRCS))
 
-.PHONY: all debug release test clean
+# Libraries to link
+LDLIBS := -L$(BUILDDIR) -larmalloc64 -lcriterion
 
-all: clean $(MEM_TEST)
+.PHONY: all clean debug release test $(notdir $(TEST_BINS))
 
+# Default: build everything
+all: $(TEST_BINS)
+
+# Build individual tests by name (e.g. make mem_test)
+$(notdir $(TEST_BINS)): %: $(BUILDDIR)/%
+	@echo "Built $@ in $(BUILD) mode"
+
+# Compile each test object
 $(BUILDDIR)/%.o: %.c
 	@mkdir -p $(BUILDDIR)
 	$(CC) $(CFLAGS) $(CPPFLAGS) -MMD -MP -c $< -o $@
 
-$(MEM_TEST): $(OBJ)
+# Link each test binary
+$(BUILDDIR)/%: $(BUILDDIR)/%.o
 	@mkdir -p $(BUILDDIR)
-	$(CC) $(CFLAGS) -o $@ $^ -L$(BUILDDIR) -larmalloc64 -lcriterion
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
-test: $(MEM_TEST)
-	$(MEM_TEST)
+# Run all tests
+test: $(TEST_BINS)
+	@for testbin in $(TEST_BINS); do \
+		echo "Running $$testbin..."; \
+		$$testbin || exit $$?; \
+	done
 
+# Clean build artifacts
 clean:
-	rm -f $(OBJ) $(MEM_TEST) $(OBJ:.o=.d)
+	rm -f $(TEST_OBJS) $(TEST_BINS) $(TEST_OBJS:.o=.d)
 
+# Convenience targets
 debug:
 	$(MAKE) BUILD=debug all
 
 release:
 	$(MAKE) BUILD=release all
 
--include $(OBJ:.o=.d)
+# Include dependency files if they exist
+-include $(TEST_OBJS:.o=.d)
