@@ -4,6 +4,7 @@
 #define __MM_H__
 
 #include <stddef.h>
+#include <stdint.h>
 
 #define NUM_SEG_LISTS 8
 
@@ -11,8 +12,8 @@
 extern "C" {
 #endif
 
-void mm_init(void);
-void mm_deinit(void);
+int mm_init(size_t arena_size);
+int mm_deinit(void);
 void *mm_malloc(size_t size);
 void mm_free(void *ptr);
 
